@@ -1,0 +1,1 @@
+{"operation":"group.ensure","payload":{"group_id":"engineering","namespace_id":"project-a"},"request_id":"ref-group-ensure","version":1}

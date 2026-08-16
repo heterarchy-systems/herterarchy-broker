@@ -1,0 +1,30 @@
+[package]
+name = "agent-broker-runtime"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+agent-broker-application = { path = "../agent-broker-application" }
+agent-broker-consensus = { path = "../agent-broker-consensus" }
+agent-broker-domain = { path = "../agent-broker-domain" }
+agent-broker-protocol = { path = "../agent-broker-protocol" }
+agent-broker-storage = { path = "../agent-broker-storage" }
+clap.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+agent-broker-client = { path = "../agent-broker-client" }
+tempfile.workspace = true
+
+[[bin]]
+name = "agentbrokerd"
+path = "src/bin/agentbrokerd.rs"
+
+[lints]
+workspace = true

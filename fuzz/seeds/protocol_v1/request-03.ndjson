@@ -1,0 +1,1 @@
+{"operation":"task.publish","payload":{"namespace_id":"project-a","objective":"Implement Rust protocol parity","task_id":"task-1"},"request_id":"ref-publish","version":1}

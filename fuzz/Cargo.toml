@@ -1,0 +1,38 @@
+[package]
+name = "agent-broker-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+agent-broker-domain = { path = "../crates/agent-broker-domain" }
+agent-broker-protocol = { path = "../crates/agent-broker-protocol" }
+agent-broker-storage = { path = "../crates/agent-broker-storage" }
+libfuzzer-sys = "0.4"
+serde_json = "1.0.151"
+
+[[bin]]
+name = "protocol_v1"
+path = "fuzz_targets/protocol_v1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_v1"
+path = "fuzz_targets/snapshot_v1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journal_v1"
+path = "fuzz_targets/journal_v1.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

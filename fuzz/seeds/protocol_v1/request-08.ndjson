@@ -1,0 +1,1 @@
+{"operation":"task.claim","payload":{"expected_generation":1,"expected_term":1,"group_id":"engineering","lease_duration_ms":30000,"lease_id":"lease-1","member_id":"worker-a"},"request_id":"ref-claim","version":1}

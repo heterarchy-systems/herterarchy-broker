@@ -1,0 +1,1 @@
+{"ok":true,"request_id":"resp-claim-empty","result":{"generation":5,"lease_epoch":null,"lease_expires_at_ms":null,"lease_id":null,"objective":null,"revision":7,"task_id":null,"task_revision":null,"term":2},"version":1}

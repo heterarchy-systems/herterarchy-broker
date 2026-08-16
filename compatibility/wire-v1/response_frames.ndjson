@@ -1,0 +1,9 @@
+{"ok":true,"request_id":"resp-health","result":{"protocol_version":1,"revision":7,"term":2},"version":1}
+{"ok":true,"request_id":"resp-namespace","result":{"namespace_id":"project-a","namespace_revision":3,"revision":7,"term":2},"version":1}
+{"ok":true,"request_id":"resp-publish","result":{"revision":7,"status":"queued","task_id":"task-1","task_revision":4,"term":2},"version":1}
+{"ok":true,"request_id":"resp-group","result":{"generation":5,"group_id":"engineering","group_revision":6,"member_count":2,"revision":7,"term":2},"version":1}
+{"ok":true,"request_id":"resp-heartbeat","result":{"generation":5,"group_id":"engineering","member_id":"worker-a","member_revision":8,"revision":7,"term":2},"version":1}
+{"ok":true,"request_id":"resp-claim-empty","result":{"generation":5,"lease_epoch":null,"lease_expires_at_ms":null,"lease_id":null,"objective":null,"revision":7,"task_id":null,"task_revision":null,"term":2},"version":1}
+{"ok":true,"request_id":"resp-renew","result":{"generation":5,"lease_epoch":2,"lease_expires_at_ms":35000,"lease_id":"lease-1","revision":7,"task_id":"task-1","task_revision":9,"term":2},"version":1}
+{"ok":true,"request_id":"resp-complete","result":{"revision":7,"status":"completed","task_id":"task-1","task_revision":10,"term":2},"version":1}
+{"error":{"code":"STALE_FENCE","message":"stale lease"},"ok":false,"request_id":"resp-error","version":1}

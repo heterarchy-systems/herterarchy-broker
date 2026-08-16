@@ -1,0 +1,1 @@
+{"operation":"task.complete","payload":{"expected_generation":1,"expected_lease_epoch":1,"expected_term":1,"group_id":"engineering","lease_id":"lease-1","member_id":"worker-a","result":"done","task_id":"task-1"},"request_id":"ref-complete","version":1}

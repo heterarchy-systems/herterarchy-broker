@@ -1,0 +1,1 @@
+{"operation":"task.renew","payload":{"expected_generation":1,"expected_lease_epoch":1,"expected_term":1,"group_id":"engineering","lease_duration_ms":30000,"lease_id":"lease-1","member_id":"worker-a","task_id":"task-1"},"request_id":"ref-renew","version":1}

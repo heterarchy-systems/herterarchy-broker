@@ -1,0 +1,10 @@
+{"operation":"health","payload":{},"request_id":"ref-health","version":1}
+{"operation":"namespace.ensure","payload":{"namespace_id":"project-a"},"request_id":"ref-namespace","version":1}
+{"operation":"task.publish","payload":{"namespace_id":"project-a","objective":"Implement Rust protocol parity","task_id":"task-1"},"request_id":"ref-publish","version":1}
+{"operation":"group.ensure","payload":{"group_id":"engineering","namespace_id":"project-a"},"request_id":"ref-group-ensure","version":1}
+{"operation":"group.join","payload":{"capabilities":["code","review","code"],"group_id":"engineering","member_id":"worker-a"},"request_id":"ref-group-join","version":1}
+{"operation":"group.heartbeat","payload":{"expected_generation":1,"group_id":"engineering","member_id":"worker-a"},"request_id":"ref-heartbeat","version":1}
+{"operation":"group.leave","payload":{"expected_generation":1,"group_id":"engineering","member_id":"worker-a"},"request_id":"ref-leave","version":1}
+{"operation":"task.claim","payload":{"expected_generation":1,"expected_term":1,"group_id":"engineering","lease_duration_ms":30000,"lease_id":"lease-1","member_id":"worker-a"},"request_id":"ref-claim","version":1}
+{"operation":"task.renew","payload":{"expected_generation":1,"expected_lease_epoch":1,"expected_term":1,"group_id":"engineering","lease_duration_ms":30000,"lease_id":"lease-1","member_id":"worker-a","task_id":"task-1"},"request_id":"ref-renew","version":1}
+{"operation":"task.complete","payload":{"expected_generation":1,"expected_lease_epoch":1,"expected_term":1,"group_id":"engineering","lease_id":"lease-1","member_id":"worker-a","result":"done","task_id":"task-1"},"request_id":"ref-complete","version":1}

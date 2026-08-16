@@ -1,0 +1,1 @@
+{"operation":"group.leave","payload":{"expected_generation":1,"group_id":"engineering","member_id":"worker-a"},"request_id":"ref-leave","version":1}

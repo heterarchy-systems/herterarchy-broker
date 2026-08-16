@@ -1,0 +1,15 @@
+[package]
+name = "agent-broker-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+agent-broker-application = { path = "../agent-broker-application" }
+agent-broker-domain = { path = "../agent-broker-domain" }
+agent-broker-protocol = { path = "../agent-broker-protocol" }
+
+[lints]
+workspace = true

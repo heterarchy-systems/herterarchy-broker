@@ -1,0 +1,1 @@
+{"operation":"group.join","payload":{"capabilities":["code","review","code"],"group_id":"engineering","member_id":"worker-a"},"request_id":"ref-group-join","version":1}

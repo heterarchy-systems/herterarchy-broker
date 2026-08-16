@@ -1,0 +1,41 @@
+[workspace]
+members = [
+    "crates/agent-broker-application",
+    "crates/agent-broker-client",
+    "crates/agent-broker-consensus",
+    "crates/agent-broker-domain",
+    "crates/agent-broker-protocol",
+    "crates/agent-broker-runtime",
+    "crates/agent-broker-storage",
+    "xtask",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+clap = { version = "4.6.6", features = ["derive"] }
+openraft = { version = "0.9.25", default-features = false, features = ["generic-snapshot-data", "serde", "single-term-leader", "storage-v2"] }
+redb = "4.1.0"
+rustix = { version = "1.1.4", features = ["fs"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"

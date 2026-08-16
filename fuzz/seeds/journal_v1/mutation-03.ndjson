@@ -1,0 +1,1 @@
+{"deleted_tasks":[],"groups":[{"generation":1,"group_id":"engineering","members":[{"capabilities":["code","review"],"joined_at_ms":1000,"last_heartbeat_at_ms":1000,"member_id":"worker-a","revision":1}],"namespace_id":"project-a","revision":2}],"namespaces":[],"revision":3,"schema_version":1,"tasks":[],"term":1}

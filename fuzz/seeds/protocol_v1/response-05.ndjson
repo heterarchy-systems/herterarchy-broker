@@ -1,0 +1,1 @@
+{"ok":true,"request_id":"resp-heartbeat","result":{"generation":5,"group_id":"engineering","member_id":"worker-a","member_revision":8,"revision":7,"term":2},"version":1}
