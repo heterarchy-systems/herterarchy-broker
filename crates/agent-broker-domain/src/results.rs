@@ -1,5 +1,5 @@
 use crate::{
-    ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId, Revision, TaskId,
     TaskObjective, TaskStatus, Term, TimestampMs,
 };
 
@@ -58,8 +58,8 @@ pub struct HeartbeatResult {
     pub metadata: MutationMetadata,
     /// Consumer Group identity.
     pub group_id: ConsumerGroupId,
-    /// Member identity.
-    pub member_id: MemberId,
+    /// Consumer identity.
+    pub member_id: ConsumerId,
     /// Current Consumer Group generation.
     pub generation: Generation,
     /// Current member revision.
@@ -157,7 +157,7 @@ pub enum BrokerMutationResult {
     TaskPublished(TaskPublishedResult),
     /// Consumer Group result.
     ConsumerGroup(ConsumerGroupResult),
-    /// Member heartbeat result.
+    /// Consumer heartbeat result.
     Heartbeat(HeartbeatResult),
     /// Global stale-member reap result.
     StaleMembersReaped(StaleMembersReapedResult),

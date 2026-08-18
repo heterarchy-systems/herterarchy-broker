@@ -3,7 +3,10 @@ use std::error::Error;
 use std::fmt;
 
 use crate::checkpoint::{CheckpointError, ConsumerGroupCheckpoint, MemberCheckpoint};
-use crate::{ConsumerGroupId, Generation, MemberId, NamespaceId, Revision, TimestampMs};
+use crate::{ConsumerGroupId, ConsumerId, Generation, NamespaceId, Revision, Term, TimestampMs};
+
+mod coordinator;
+pub(crate) use coordinator::{GroupCoordinator, GroupCoordinatorError};
 
 const MAX_CAPABILITIES: usize = 64;
 const MAX_CAPABILITY_BYTES: usize = 64;
@@ -116,6 +119,18 @@ impl Capabilities {
     pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Return whether this advertised capability set contains every required capability.
+    ///
+    /// Both sets are normalized and sorted at construction time, so this comparison is
+    /// deterministic and independent of provider/runtime details.
+    #[must_use]
+    pub fn contains_all(&self, required: &Self) -> bool {
+        required
+            .as_slice()
+            .iter()
+            .all(|capability| self.0.binary_search(capability).is_ok())
+    }
 }
 
 /// Capability validation failure.
@@ -140,18 +155,22 @@ impl fmt::Display for CapabilitiesError {
 
 impl Error for CapabilitiesError {}
 
-/// Consumer Group member record with explicit heartbeat and revision state.
+/// Provider-neutral logical Consumer participating in one Consumer Group.
+///
+/// A Consumer is intentionally not a `ChatGPT` conversation, browser tab, CLI process, wake target,
+/// or orchestration slot. External runtimes bind those physical resources to this stable logical
+/// identity outside Broker authority.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Member {
-    id: MemberId,
+pub struct Consumer {
+    id: ConsumerId,
     capabilities: Capabilities,
     joined_at_ms: TimestampMs,
     last_heartbeat_at_ms: TimestampMs,
     revision: Revision,
 }
 
-impl Member {
-    fn new(id: MemberId, capabilities: Capabilities, now_ms: TimestampMs) -> Self {
+impl Consumer {
+    fn new(id: ConsumerId, capabilities: Capabilities, now_ms: TimestampMs) -> Self {
         Self {
             id,
             capabilities,
@@ -161,9 +180,9 @@ impl Member {
         }
     }
 
-    /// Borrow the member identifier.
+    /// Borrow the logical Consumer identifier.
     #[must_use]
-    pub const fn member_id(&self) -> &MemberId {
+    pub const fn consumer_id(&self) -> &ConsumerId {
         &self.id
     }
 
@@ -214,6 +233,95 @@ impl Member {
     }
 }
 
+/// Bounded provider-neutral management summary for one Consumer Group / Agent Company.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ConsumerGroupSummary {
+    group_id: ConsumerGroupId,
+    namespace_id: NamespaceId,
+    generation: Generation,
+    revision: Revision,
+    consumer_count: usize,
+}
+
+/// One internally consistent read-only directory snapshot of all Consumer Groups.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ConsumerGroupDirectory {
+    term: Term,
+    revision: Revision,
+    groups: Box<[ConsumerGroupSummary]>,
+}
+
+impl ConsumerGroupDirectory {
+    #[must_use]
+    pub fn new(term: Term, revision: Revision, groups: Vec<ConsumerGroupSummary>) -> Self {
+        Self {
+            term,
+            revision,
+            groups: groups.into_boxed_slice(),
+        }
+    }
+
+    #[must_use]
+    pub const fn term(&self) -> Term {
+        self.term
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    #[must_use]
+    pub fn groups(&self) -> &[ConsumerGroupSummary] {
+        &self.groups
+    }
+
+    #[must_use]
+    pub fn group(&self, group_id: &ConsumerGroupId) -> Option<&ConsumerGroupSummary> {
+        self.groups
+            .binary_search_by(|group| group.group_id().cmp(group_id))
+            .ok()
+            .map(|index| &self.groups[index])
+    }
+}
+
+impl ConsumerGroupSummary {
+    fn from_group(group: &ConsumerGroup) -> Self {
+        Self {
+            group_id: group.group_id().clone(),
+            namespace_id: group.namespace_id().clone(),
+            generation: group.generation(),
+            revision: group.revision(),
+            consumer_count: group.consumer_count(),
+        }
+    }
+
+    #[must_use]
+    pub const fn group_id(&self) -> &ConsumerGroupId {
+        &self.group_id
+    }
+
+    #[must_use]
+    pub const fn namespace_id(&self) -> &NamespaceId {
+        &self.namespace_id
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    #[must_use]
+    pub const fn consumer_count(&self) -> usize {
+        self.consumer_count
+    }
+}
+
 /// Outcome of a join retry/new admission.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum JoinOutcome {
@@ -228,7 +336,7 @@ pub enum JoinOutcome {
 /// Outcome of a heartbeat command.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum HeartbeatOutcome {
-    /// Member and group revisions advanced.
+    /// Consumer and group revisions advanced.
     Updated,
     /// The timestamp was not newer, so no mutation occurred.
     Unchanged,
@@ -243,9 +351,9 @@ pub enum ConsumerGroupError {
         actual: Generation,
     },
     /// Requested member does not exist.
-    MemberNotFound(MemberId),
+    MemberNotFound(ConsumerId),
     /// An existing member retried join with different capabilities.
-    CapabilityConflict(MemberId),
+    CapabilityConflict(ConsumerId),
     /// A new member would exceed configured group capacity.
     MemberCapacityReached { max_members: usize },
     /// Capacity must be at least one for new-member admission.
@@ -308,7 +416,7 @@ pub struct ConsumerGroup {
     namespace_id: NamespaceId,
     generation: Generation,
     revision: Revision,
-    members: BTreeMap<MemberId, Member>,
+    consumers: BTreeMap<ConsumerId, Consumer>,
 }
 
 impl ConsumerGroup {
@@ -320,7 +428,7 @@ impl ConsumerGroup {
             namespace_id,
             generation: Generation::new(0),
             revision: Revision::new(1),
-            members: BTreeMap::new(),
+            consumers: BTreeMap::new(),
         }
     }
 
@@ -348,21 +456,27 @@ impl ConsumerGroup {
         self.revision
     }
 
-    /// Return member count.
+    /// Return Consumer count.
     #[must_use]
-    pub fn member_count(&self) -> usize {
-        self.members.len()
+    pub fn consumer_count(&self) -> usize {
+        self.consumers.len()
     }
 
-    /// Borrow a member by ID.
+    /// Borrow a logical Consumer by ID using HETERARCHY domain vocabulary.
     #[must_use]
-    pub fn member(&self, member_id: &MemberId) -> Option<&Member> {
-        self.members.get(member_id)
+    pub fn consumer(&self, consumer_id: &ConsumerId) -> Option<&Consumer> {
+        self.consumers.get(consumer_id)
     }
 
-    /// Iterate members in deterministic member-ID order.
-    pub fn members(&self) -> impl Iterator<Item = &Member> {
-        self.members.values()
+    /// Iterate logical Consumers in deterministic Consumer-ID order.
+    pub fn consumers(&self) -> impl Iterator<Item = &Consumer> {
+        self.consumers.values()
+    }
+
+    /// Build one read-only management summary without exposing mutable membership internals.
+    #[must_use]
+    pub fn summary(&self) -> ConsumerGroupSummary {
+        ConsumerGroupSummary::from_group(self)
     }
 
     /// Export this Consumer Group into the logical persistence/replication checkpoint contract.
@@ -373,20 +487,20 @@ impl ConsumerGroup {
             namespace_id: self.namespace_id.clone(),
             generation: self.generation,
             revision: self.revision,
-            members: self.members.values().map(Member::checkpoint).collect(),
+            members: self.consumers.values().map(Consumer::checkpoint).collect(),
         }
     }
 
     pub(crate) fn from_checkpoint(
         checkpoint: ConsumerGroupCheckpoint,
     ) -> Result<Self, CheckpointError> {
-        let mut members = BTreeMap::new();
+        let mut consumers = BTreeMap::new();
         for member_checkpoint in checkpoint.members {
             let member_id = member_checkpoint.member_id.clone();
-            if members
+            if consumers
                 .insert(
                     member_id.clone(),
-                    Member::from_checkpoint(member_checkpoint),
+                    Consumer::from_checkpoint(member_checkpoint),
                 )
                 .is_some()
             {
@@ -398,7 +512,7 @@ impl ConsumerGroup {
             namespace_id: checkpoint.namespace_id,
             generation: checkpoint.generation,
             revision: checkpoint.revision,
-            members,
+            consumers,
         })
     }
 
@@ -410,12 +524,12 @@ impl ConsumerGroup {
     /// overflow.
     pub fn join(
         &mut self,
-        member_id: MemberId,
+        member_id: ConsumerId,
         capabilities: Capabilities,
         now_ms: TimestampMs,
         max_members: usize,
     ) -> Result<JoinOutcome, ConsumerGroupError> {
-        if let Some(member) = self.members.get_mut(&member_id) {
+        if let Some(member) = self.consumers.get_mut(&member_id) {
             if member.capabilities != capabilities {
                 return Err(ConsumerGroupError::CapabilityConflict(member_id));
             }
@@ -433,14 +547,14 @@ impl ConsumerGroup {
         if max_members == 0 {
             return Err(ConsumerGroupError::InvalidMemberCapacity);
         }
-        if self.members.len() >= max_members {
+        if self.consumers.len() >= max_members {
             return Err(ConsumerGroupError::MemberCapacityReached { max_members });
         }
         let next_generation = self.generation.next()?;
         let next_group_revision = self.revision.next()?;
-        self.members.insert(
+        self.consumers.insert(
             member_id.clone(),
-            Member::new(member_id, capabilities, now_ms),
+            Consumer::new(member_id, capabilities, now_ms),
         );
         self.generation = next_generation;
         self.revision = next_group_revision;
@@ -454,13 +568,13 @@ impl ConsumerGroup {
     /// Returns [`ConsumerGroupError`] for stale generation, missing member, or revision overflow.
     pub fn heartbeat(
         &mut self,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
         expected_generation: Generation,
         now_ms: TimestampMs,
     ) -> Result<HeartbeatOutcome, ConsumerGroupError> {
         self.require_generation(expected_generation)?;
         let member = self
-            .members
+            .consumers
             .get_mut(member_id)
             .ok_or_else(|| ConsumerGroupError::MemberNotFound(member_id.clone()))?;
         if now_ms <= member.last_heartbeat_at_ms {
@@ -482,16 +596,16 @@ impl ConsumerGroup {
     /// Returns [`ConsumerGroupError`] for stale generation, missing member, or counter overflow.
     pub fn leave(
         &mut self,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
         expected_generation: Generation,
-    ) -> Result<Member, ConsumerGroupError> {
+    ) -> Result<Consumer, ConsumerGroupError> {
         self.require_generation(expected_generation)?;
-        if !self.members.contains_key(member_id) {
+        if !self.consumers.contains_key(member_id) {
             return Err(ConsumerGroupError::MemberNotFound(member_id.clone()));
         }
         let next_generation = self.generation.next()?;
         let next_revision = self.revision.next()?;
-        let Some(member) = self.members.remove(member_id) else {
+        let Some(member) = self.consumers.remove(member_id) else {
             return Err(ConsumerGroupError::MemberNotFound(member_id.clone()));
         };
         self.generation = next_generation;
@@ -510,12 +624,12 @@ impl ConsumerGroup {
         &mut self,
         stale_before_ms: TimestampMs,
         max_members: usize,
-    ) -> Result<Vec<Member>, ConsumerGroupError> {
+    ) -> Result<Vec<Consumer>, ConsumerGroupError> {
         if max_members == 0 {
             return Err(ConsumerGroupError::InvalidMemberCapacity);
         }
         let stale_ids = self
-            .members
+            .consumers
             .values()
             .filter(|member| member.last_heartbeat_at_ms <= stale_before_ms)
             .map(|member| (member.last_heartbeat_at_ms, member.id.clone()))
@@ -532,7 +646,7 @@ impl ConsumerGroup {
         let next_revision = self.revision.next()?;
         let mut removed = Vec::with_capacity(stale_ids.len());
         for member_id in stale_ids {
-            if let Some(member) = self.members.remove(&member_id) {
+            if let Some(member) = self.consumers.remove(&member_id) {
                 removed.push(member);
             }
         }
@@ -541,7 +655,10 @@ impl ConsumerGroup {
         Ok(removed)
     }
 
-    fn require_generation(&self, expected: Generation) -> Result<(), ConsumerGroupError> {
+    pub(crate) fn require_generation(
+        &self,
+        expected: Generation,
+    ) -> Result<(), ConsumerGroupError> {
         if self.generation != expected {
             return Err(ConsumerGroupError::StaleGeneration {
                 expected,
@@ -557,7 +674,7 @@ mod tests {
     use std::error::Error;
 
     use super::{Capabilities, ConsumerGroup, ConsumerGroupError, HeartbeatOutcome, JoinOutcome};
-    use crate::{ConsumerGroupId, Generation, MemberId, NamespaceId, TimestampMs};
+    use crate::{ConsumerGroupId, ConsumerId, Generation, NamespaceId, TimestampMs};
 
     fn group() -> Result<ConsumerGroup, Box<dyn Error>> {
         Ok(ConsumerGroup::new(
@@ -582,7 +699,7 @@ mod tests {
     fn join_retry_is_idempotent_and_newer_time_only_refreshes_revision()
     -> Result<(), Box<dyn Error>> {
         let mut group = group()?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let capabilities = Capabilities::new(["code", "review"])?;
         assert_eq!(
             group.join(
@@ -621,7 +738,7 @@ mod tests {
         assert_eq!(group.revision().get(), 3);
         assert_eq!(
             group
-                .member(&member_id)
+                .consumer(&member_id)
                 .map(|member| member.revision().get()),
             Some(2)
         );
@@ -631,7 +748,7 @@ mod tests {
     #[test]
     fn join_with_different_capabilities_conflicts() -> Result<(), Box<dyn Error>> {
         let mut group = group()?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         group.join(
             member_id.clone(),
             Capabilities::new(["code"])?,
@@ -654,7 +771,7 @@ mod tests {
     fn heartbeat_requires_current_generation_and_only_newer_time_mutates()
     -> Result<(), Box<dyn Error>> {
         let mut group = group()?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         group.join(
             member_id.clone(),
             Capabilities::new(["code"])?,
@@ -681,9 +798,9 @@ mod tests {
     fn leave_and_reap_advance_generation_once_per_membership_change() -> Result<(), Box<dyn Error>>
     {
         let mut group = group()?;
-        let worker_a = MemberId::new("worker-a")?;
-        let worker_b = MemberId::new("worker-b")?;
-        let worker_c = MemberId::new("worker-c")?;
+        let worker_a = ConsumerId::new("worker-a")?;
+        let worker_b = ConsumerId::new("worker-b")?;
+        let worker_c = ConsumerId::new("worker-c")?;
         for (member_id, timestamp) in [
             (worker_a.clone(), 1_000),
             (worker_b.clone(), 1_100),
@@ -700,18 +817,18 @@ mod tests {
         let removed = group.reap_stale_members(TimestampMs::new(2_000), 8)?;
         assert_eq!(removed.len(), 2);
         assert_eq!(group.generation().get(), 4);
-        assert_eq!(group.member_count(), 1);
+        assert_eq!(group.consumer_count(), 1);
 
         group.leave(&worker_c, Generation::new(4))?;
         assert_eq!(group.generation().get(), 5);
-        assert_eq!(group.member_count(), 0);
+        assert_eq!(group.consumer_count(), 0);
         Ok(())
     }
 
     #[test]
     fn capacity_is_checked_only_for_new_members() -> Result<(), Box<dyn Error>> {
         let mut group = group()?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let capabilities = Capabilities::new(["code"])?;
         group.join(
             member_id.clone(),
@@ -725,7 +842,7 @@ mod tests {
         );
         assert!(matches!(
             group.join(
-                MemberId::new("worker-b")?,
+                ConsumerId::new("worker-b")?,
                 Capabilities::new(["code"])?,
                 TimestampMs::new(1_002),
                 1,

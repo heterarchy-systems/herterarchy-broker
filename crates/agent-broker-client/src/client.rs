@@ -12,7 +12,7 @@ use agent_broker_domain::results::{
     TaskCompletedResult, TaskLeaseRenewedResult, TaskPublishedResult,
 };
 use agent_broker_domain::{
-    ConsumerGroupId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId, MemberId, NamespaceId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId, NamespaceId,
     TaskId, TaskObjective, TaskResult, Term,
 };
 use agent_broker_protocol::{
@@ -111,7 +111,7 @@ impl BrokerClientConfig {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ClaimInput {
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub lease_id: LeaseId,
@@ -123,7 +123,7 @@ pub struct ClaimInput {
 pub struct RenewInput {
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,
@@ -136,7 +136,7 @@ pub struct RenewInput {
 pub struct CompleteInput {
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,
@@ -495,7 +495,7 @@ impl BrokerClient {
     pub fn join_consumer_group(
         &mut self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         capabilities: DeclaredCapabilities,
     ) -> Result<ConsumerGroupResult, ClientError> {
         let request_id = self.next_request_id()?;
@@ -518,7 +518,7 @@ impl BrokerClient {
     pub fn heartbeat(
         &mut self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
     ) -> Result<HeartbeatResult, ClientError> {
         let request_id = self.next_request_id()?;
@@ -539,7 +539,7 @@ impl BrokerClient {
     pub fn leave_consumer_group(
         &mut self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
     ) -> Result<ConsumerGroupResult, ClientError> {
         let request_id = self.next_request_id()?;

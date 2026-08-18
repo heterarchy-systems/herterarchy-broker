@@ -28,10 +28,22 @@ herterarchy-broker
       │
       ├─ task coordination
       ├─ consumer groups
+      │    └─ one GroupCoordinator manages the Broker-wide group registry
       ├─ leases and fencing
       ├─ durable recovery
       └─ standalone / 3-node Raft
 ```
+
+Consumer Groups are independent provider-neutral Agent Company boundaries. The authoritative
+group/Consumer state lives in the replicated Broker state, while one stateless
+`GroupCoordinator` subsystem selects groups by `group_id` and applies Consumer lifecycle operations
+such as join, heartbeat, leave, stale-Consumer reap, and current-Consumer validation. There is no
+separate coordinator process per group and no second group-state authority.
+
+Group registration itself remains a `BrokerStateMachine` cross-entity transition because it is
+coupled to namespace capacity accounting and the global Broker revision. Once registered,
+Consumer control is routed through `GroupCoordinator`; Consumer removal and Task lease requeue
+remain one deterministic Broker transition.
 
 ## Why this exists
 
@@ -62,6 +74,10 @@ cargo run -p agent-broker-runtime --bin agentbrokerd -- serve \
   --host 127.0.0.1 \
   --port 8811
 ```
+
+Standalone also exposes the separate read-only `operations-v1` endpoint on `127.0.0.1:8812` by
+default. It provides bounded authoritative Group directory reads such as `describe_group` and
+`list_groups`; it is not a mutation endpoint.
 
 Check that it is healthy:
 
@@ -115,7 +131,7 @@ Local development:
 ```bash
 cd sdks/python
 uv sync --locked --dev
-uv run python -m unittest -v tests.test_sdk tests.test_async_sdk
+uv run python -m unittest -v tests.test_sdk tests.test_async_sdk tests.test_operations_sdk
 ```
 
 See [`sdks/python/README.md`](./sdks/python/README.md) for the SDK API and examples.

@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::checkpoint::{TaskCheckpoint, TaskCheckpointState};
 use crate::{
-    ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId, Revision, TaskId,
 };
 
 const MAX_OBJECTIVE_BYTES: usize = 16 * 1024;
@@ -201,7 +201,7 @@ impl QueuedTask {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LeasedTask {
     lease_id: LeaseId,
-    owner_member_id: MemberId,
+    owner_member_id: ConsumerId,
     group_id: ConsumerGroupId,
     generation: Generation,
     lease_epoch: LeaseEpoch,
@@ -212,7 +212,7 @@ pub struct LeasedTask {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LeaseGrant {
     lease_id: LeaseId,
-    owner_member_id: MemberId,
+    owner_member_id: ConsumerId,
     group_id: ConsumerGroupId,
     generation: Generation,
     expires_at_ms: TimestampMs,
@@ -223,7 +223,7 @@ impl LeaseGrant {
     #[must_use]
     pub const fn new(
         lease_id: LeaseId,
-        owner_member_id: MemberId,
+        owner_member_id: ConsumerId,
         group_id: ConsumerGroupId,
         generation: Generation,
         expires_at_ms: TimestampMs,
@@ -242,7 +242,7 @@ impl LeaseGrant {
 #[derive(Debug, Copy, Clone)]
 pub struct LeaseFence<'a> {
     lease_id: &'a LeaseId,
-    owner_member_id: &'a MemberId,
+    owner_member_id: &'a ConsumerId,
     group_id: &'a ConsumerGroupId,
     generation: Generation,
     lease_epoch: LeaseEpoch,
@@ -254,7 +254,7 @@ impl<'a> LeaseFence<'a> {
     #[must_use]
     pub const fn new(
         lease_id: &'a LeaseId,
-        owner_member_id: &'a MemberId,
+        owner_member_id: &'a ConsumerId,
         group_id: &'a ConsumerGroupId,
         generation: Generation,
         lease_epoch: LeaseEpoch,
@@ -289,7 +289,7 @@ impl LeasedTask {
 
     /// Borrow the member that owns the lease.
     #[must_use]
-    pub fn owner_member_id(&self) -> &MemberId {
+    pub fn owner_member_id(&self) -> &ConsumerId {
         &self.owner_member_id
     }
 
@@ -322,7 +322,7 @@ impl LeasedTask {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CompletedTask {
     lease_id: LeaseId,
-    owner_member_id: MemberId,
+    owner_member_id: ConsumerId,
     group_id: ConsumerGroupId,
     generation: Generation,
     lease_epoch: LeaseEpoch,
@@ -339,7 +339,7 @@ impl CompletedTask {
 
     /// Borrow the member whose completion was accepted.
     #[must_use]
-    pub fn owner_member_id(&self) -> &MemberId {
+    pub fn owner_member_id(&self) -> &ConsumerId {
         &self.owner_member_id
     }
 
@@ -667,7 +667,7 @@ impl Task {
     pub fn requeue_for_member(
         &mut self,
         group_id: &ConsumerGroupId,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
     ) -> Result<bool, TaskTransitionError> {
         let TaskState::Leased(lease) = &self.state else {
             return Ok(false);
@@ -719,7 +719,7 @@ mod tests {
         CompletionOutcome, LeaseFence, LeaseGrant, MAX_OBJECTIVE_BYTES, MAX_RESULT_BYTES, Task,
         TaskObjective, TaskResult, TaskState, TaskStatus, TaskTransitionError, TimestampMs,
     };
-    use crate::{ConsumerGroupId, Generation, LeaseId, MemberId, NamespaceId, TaskId};
+    use crate::{ConsumerGroupId, ConsumerId, Generation, LeaseId, NamespaceId, TaskId};
 
     fn task() -> Result<Task, Box<dyn std::error::Error>> {
         Ok(Task::new(
@@ -766,7 +766,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let mut task = task()?;
         let lease_id = LeaseId::new("lease-1")?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let group_id = ConsumerGroupId::new("engineering")?;
         let generation = Generation::new(1);
         task.claim(LeaseGrant::new(
@@ -826,7 +826,7 @@ mod tests {
     fn stale_fence_and_expired_lease_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let mut task = task()?;
         let lease_id = LeaseId::new("lease-1")?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let group_id = ConsumerGroupId::new("engineering")?;
         task.claim(LeaseGrant::new(
             lease_id.clone(),
@@ -872,7 +872,7 @@ mod tests {
     fn expired_requeue_retains_epoch_and_next_claim_advances_it()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut task = task()?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let group_id = ConsumerGroupId::new("engineering")?;
         task.claim(LeaseGrant::new(
             LeaseId::new("lease-1")?,

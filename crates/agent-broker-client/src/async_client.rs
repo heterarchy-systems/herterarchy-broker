@@ -10,7 +10,7 @@ use agent_broker_domain::results::{
     TaskLeaseRenewedResult, TaskPublishedResult,
 };
 use agent_broker_domain::{
-    ConsumerGroupId, Generation, MemberId, NamespaceId, TaskId, TaskObjective,
+    ConsumerGroupId, ConsumerId, Generation, NamespaceId, TaskId, TaskObjective,
 };
 use agent_broker_protocol::{
     BrokerRequest, EnsureConsumerGroupRequest, EnsureNamespaceRequest, HealthRequest,
@@ -390,7 +390,7 @@ impl AsyncBrokerClient {
     pub async fn join_consumer_group(
         &self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         capabilities: agent_broker_protocol::DeclaredCapabilities,
     ) -> Result<ConsumerGroupResult, ClientError> {
         let request_id = self.next_request_id()?;
@@ -414,7 +414,7 @@ impl AsyncBrokerClient {
     pub async fn heartbeat(
         &self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
     ) -> Result<HeartbeatResult, ClientError> {
         let request_id = self.next_request_id()?;
@@ -436,7 +436,7 @@ impl AsyncBrokerClient {
     pub async fn leave_consumer_group(
         &self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
     ) -> Result<ConsumerGroupResult, ClientError> {
         let request_id = self.next_request_id()?;

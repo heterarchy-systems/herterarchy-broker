@@ -63,7 +63,7 @@ jobs:
       - name: Run sync and native-asyncio focused tests
         env:
           PYTHONPATH: src
-        run: uv run python -m unittest -v tests.test_sdk tests.test_async_sdk
+        run: uv run python -m unittest -v tests.test_sdk tests.test_async_sdk tests.test_operations_sdk
 
   python-quality:
     name: Python quality and package
@@ -102,14 +102,16 @@ jobs:
           uv run --isolated --no-project --python 3.11 --with dist/*.whl python -c
           "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
           StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
-          AsyncClusterBrokerClient; print('wheel imports: PASS')"
+          AsyncClusterBrokerClient, BrokerOperationsClient, AsyncBrokerOperationsClient;
+          print('wheel imports: PASS')"
 
       - name: Smoke test source distribution
         run: >-
           uv run --isolated --no-project --python 3.11 --with dist/*.tar.gz python -c
           "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
           StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
-          AsyncClusterBrokerClient; print('sdist imports: PASS')"
+          AsyncClusterBrokerClient, BrokerOperationsClient, AsyncBrokerOperationsClient;
+          print('sdist imports: PASS')"
 
   docker:
     name: Docker multi-arch build only

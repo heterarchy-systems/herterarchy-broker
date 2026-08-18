@@ -1,4 +1,4 @@
-"""Compatibility namespace for the canonical native-asyncio direct client."""
+"""Convenience namespace for the canonical native-asyncio direct client."""
 
 from ..async_client import AsyncBrokerClient
 

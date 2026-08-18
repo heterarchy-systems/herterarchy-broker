@@ -12,6 +12,7 @@ use crate::commands::{
     LeaveConsumerGroupCommand, PruneCompletedTasksCommand, PublishTaskCommand,
     ReapStaleMembersCommand, RenewTaskLeaseCommand,
 };
+use crate::group::{GroupCoordinator, GroupCoordinatorError};
 use crate::results::{
     AppliedMutation, BrokerMutationResult, CompletedTasksPrunedResult, ConsumerGroupResult,
     HeartbeatResult, MutationMetadata, NamespaceResult, StaleMembersReapedResult, StateChangeSet,
@@ -19,10 +20,10 @@ use crate::results::{
     TermAdvancedResult,
 };
 use crate::{
-    CompletionOutcome, ConsumerGroup, ConsumerGroupError, ConsumerGroupId, Generation,
-    HeartbeatOutcome, JoinOutcome, LeaseEpoch, LeaseFence, LeaseGrant, LeaseId, MemberId,
-    NamespaceId, Revision, Task, TaskId, TaskState, TaskStatus, TaskTransitionError, Term,
-    TimestampMs,
+    Capabilities, CompletionOutcome, ConsumerGroup, ConsumerGroupDirectory, ConsumerGroupError,
+    ConsumerGroupId, ConsumerGroupSummary, ConsumerId, Generation, HeartbeatOutcome, JoinOutcome,
+    LeaseEpoch, LeaseFence, LeaseGrant, LeaseId, NamespaceId, Revision, Task, TaskId, TaskState,
+    TaskStatus, TaskTransitionError, Term, TimestampMs,
 };
 
 type ReadyTaskHeap = BinaryHeap<Reverse<(TimestampMs, TaskId)>>;
@@ -142,6 +143,24 @@ impl BrokerState {
     #[must_use]
     pub fn group_count(&self) -> usize {
         self.groups.len()
+    }
+
+    /// Return deterministic Consumer Group summaries ordered by Group ID.
+    #[must_use]
+    pub fn group_summaries(&self) -> Vec<ConsumerGroupSummary> {
+        self.groups.values().map(ConsumerGroup::summary).collect()
+    }
+
+    /// Return one Consumer Group summary without exposing mutable Group state.
+    #[must_use]
+    pub fn group_summary(&self, group_id: &ConsumerGroupId) -> Option<ConsumerGroupSummary> {
+        self.groups.get(group_id).map(ConsumerGroup::summary)
+    }
+
+    /// Return one internally consistent read-only Group directory snapshot.
+    #[must_use]
+    pub fn group_directory(&self) -> ConsumerGroupDirectory {
+        ConsumerGroupDirectory::new(self.term, self.revision, self.group_summaries())
     }
 
     /// Export the complete logical authoritative state without derived runtime indexes.
@@ -276,6 +295,15 @@ impl From<ConsumerGroupError> for StateMachineError {
     }
 }
 
+impl From<GroupCoordinatorError> for StateMachineError {
+    fn from(error: GroupCoordinatorError) -> Self {
+        match error {
+            GroupCoordinatorError::GroupNotFound(group_id) => Self::ConsumerGroupNotFound(group_id),
+            GroupCoordinatorError::Transition(error) => Self::ConsumerGroupTransition(error),
+        }
+    }
+}
+
 impl From<TaskTransitionError> for StateMachineError {
     fn from(error: TaskTransitionError) -> Self {
         Self::TaskTransition(error)
@@ -289,7 +317,7 @@ pub struct BrokerStateMachine {
     ready_tasks: BTreeMap<NamespaceId, ReadyTaskHeap>,
     lease_expirations: BTreeMap<NamespaceId, LeaseExpirationHeap>,
     active_lease_tasks: BTreeMap<LeaseId, TaskId>,
-    member_lease_tasks: BTreeMap<(ConsumerGroupId, MemberId), BTreeSet<TaskId>>,
+    member_lease_tasks: BTreeMap<(ConsumerGroupId, ConsumerId), BTreeSet<TaskId>>,
     completed_tasks: CompletedTaskHeap,
     namespace_task_counts: BTreeMap<NamespaceId, usize>,
     namespace_group_counts: BTreeMap<NamespaceId, usize>,
@@ -304,7 +332,7 @@ struct RestoredIndexes {
     ready_tasks: BTreeMap<NamespaceId, ReadyTaskHeap>,
     lease_expirations: BTreeMap<NamespaceId, LeaseExpirationHeap>,
     active_lease_tasks: BTreeMap<LeaseId, TaskId>,
-    member_lease_tasks: BTreeMap<(ConsumerGroupId, MemberId), BTreeSet<TaskId>>,
+    member_lease_tasks: BTreeMap<(ConsumerGroupId, ConsumerId), BTreeSet<TaskId>>,
     completed_tasks: CompletedTaskHeap,
     namespace_task_counts: BTreeMap<NamespaceId, usize>,
     namespace_group_counts: BTreeMap<NamespaceId, usize>,
@@ -315,6 +343,30 @@ impl BrokerStateMachine {
     #[must_use]
     pub const fn state(&self) -> &BrokerState {
         &self.state
+    }
+
+    /// Return current logical Consumers in one Consumer Group whose advertised capabilities
+    /// satisfy every required capability.
+    ///
+    /// This read-only query is provider-neutral and deterministic. It does not inspect physical
+    /// runtime availability and does not assign Task ownership; callers may use the result as an
+    /// input to a later HETERARCHY coordination policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StateMachineError::ConsumerGroupNotFound`] when the requested Company/group is
+    /// not registered.
+    pub fn consumers_matching_capabilities(
+        &self,
+        group_id: &ConsumerGroupId,
+        required_capabilities: &Capabilities,
+    ) -> Result<Vec<ConsumerId>, StateMachineError> {
+        GroupCoordinator::consumers_matching_capabilities(
+            &self.state.groups,
+            group_id,
+            required_capabilities,
+        )
+        .map_err(StateMachineError::from)
     }
 
     /// Restore authoritative state from a logical checkpoint and deterministically rebuild every
@@ -719,26 +771,23 @@ impl BrokerStateMachine {
         command: JoinConsumerGroupCommand,
     ) -> Result<ConsumerGroupResult, StateMachineError> {
         let next_global_revision = self.state.revision.next()?;
-        let (outcome, group_id, generation, group_revision, member_count) = {
-            let group = self
-                .state
-                .groups
-                .get_mut(&command.group_id)
-                .ok_or_else(|| {
-                    StateMachineError::ConsumerGroupNotFound(command.group_id.clone())
-                })?;
-            let outcome = group.join(
-                command.member_id,
-                command.capabilities,
-                command.now_ms,
-                command.max_group_members,
-            )?;
+        let outcome = GroupCoordinator::join(
+            &mut self.state.groups,
+            &command.group_id,
+            command.member_id,
+            command.capabilities,
+            command.now_ms,
+            command.max_group_members,
+        )?;
+        let (group_id, generation, group_revision, member_count) = {
+            let group = self.state.groups.get(&command.group_id).ok_or_else(|| {
+                StateMachineError::ConsumerGroupNotFound(command.group_id.clone())
+            })?;
             (
-                outcome,
                 group.group_id().clone(),
                 group.generation(),
                 group.revision(),
-                group.member_count(),
+                group.consumer_count(),
             )
         };
         if outcome != JoinOutcome::Unchanged {
@@ -759,29 +808,26 @@ impl BrokerStateMachine {
         command: HeartbeatCommand,
     ) -> Result<HeartbeatResult, StateMachineError> {
         let next_global_revision = self.state.revision.next()?;
-        let (outcome, group_id, generation, member_revision) = {
-            let group = self
-                .state
-                .groups
-                .get_mut(&command.group_id)
-                .ok_or_else(|| {
-                    StateMachineError::ConsumerGroupNotFound(command.group_id.clone())
-                })?;
-            let outcome = group.heartbeat(
-                &command.member_id,
-                command.expected_generation,
-                command.now_ms,
-            )?;
+        let outcome = GroupCoordinator::heartbeat(
+            &mut self.state.groups,
+            &command.group_id,
+            &command.member_id,
+            command.expected_generation,
+            command.now_ms,
+        )?;
+        let (group_id, generation, member_revision) = {
+            let group = self.state.groups.get(&command.group_id).ok_or_else(|| {
+                StateMachineError::ConsumerGroupNotFound(command.group_id.clone())
+            })?;
             let member_revision = group
-                .member(&command.member_id)
-                .map(crate::Member::revision)
+                .consumer(&command.member_id)
+                .map(crate::Consumer::revision)
                 .ok_or_else(|| {
                     StateMachineError::ConsumerGroupTransition(ConsumerGroupError::MemberNotFound(
                         command.member_id.clone(),
                     ))
                 })?;
             (
-                outcome,
                 group.group_id().clone(),
                 group.generation(),
                 member_revision,
@@ -806,20 +852,21 @@ impl BrokerStateMachine {
     ) -> Result<ConsumerGroupResult, StateMachineError> {
         let next_global_revision = self.state.revision.next()?;
         self.preflight_member_lease_requeue(&command.group_id, &command.member_id)?;
+        let _removed_member = GroupCoordinator::leave(
+            &mut self.state.groups,
+            &command.group_id,
+            &command.member_id,
+            command.expected_generation,
+        )?;
         let (group_id, generation, group_revision, member_count) = {
-            let group = self
-                .state
-                .groups
-                .get_mut(&command.group_id)
-                .ok_or_else(|| {
-                    StateMachineError::ConsumerGroupNotFound(command.group_id.clone())
-                })?;
-            let _removed_member = group.leave(&command.member_id, command.expected_generation)?;
+            let group = self.state.groups.get(&command.group_id).ok_or_else(|| {
+                StateMachineError::ConsumerGroupNotFound(command.group_id.clone())
+            })?;
             (
                 group.group_id().clone(),
                 group.generation(),
                 group.revision(),
-                group.member_count(),
+                group.consumer_count(),
             )
         };
         self.requeue_member_leases(&group_id, &command.member_id)?;
@@ -850,13 +897,13 @@ impl BrokerStateMachine {
             .iter()
             .flat_map(|(group_id, group)| {
                 group
-                    .members()
+                    .consumers()
                     .filter(|member| member.last_heartbeat_at_ms() <= command.stale_before_ms)
                     .map(|member| {
                         (
                             member.last_heartbeat_at_ms(),
                             group_id.clone(),
-                            member.member_id().clone(),
+                            member.consumer_id().clone(),
                         )
                     })
             })
@@ -871,7 +918,7 @@ impl BrokerStateMachine {
             });
         }
 
-        let mut selected_members = BTreeMap::<ConsumerGroupId, Vec<MemberId>>::new();
+        let mut selected_members = BTreeMap::<ConsumerGroupId, Vec<ConsumerId>>::new();
         for (_, group_id, member_id) in candidates {
             selected_members
                 .entry(group_id)
@@ -896,17 +943,16 @@ impl BrokerStateMachine {
         let mut reaped_count = 0;
         let mut affected_group_ids = Vec::with_capacity(selected_members.len());
         for (group_id, member_ids) in selected_members {
-            let removed = {
-                let group =
-                    self.state.groups.get_mut(&group_id).ok_or_else(|| {
-                        StateMachineError::ConsumerGroupNotFound(group_id.clone())
-                    })?;
-                group.reap_stale_members(command.stale_before_ms, member_ids.len())?
-            };
+            let removed = GroupCoordinator::reap_stale_members(
+                &mut self.state.groups,
+                &group_id,
+                command.stale_before_ms,
+                member_ids.len(),
+            )?;
             if !removed.is_empty() {
                 reaped_count += removed.len();
                 for member in &removed {
-                    self.requeue_member_leases(&group_id, member.member_id())?;
+                    self.requeue_member_leases(&group_id, member.consumer_id())?;
                 }
                 affected_group_ids.push(group_id);
             }
@@ -1236,28 +1282,16 @@ impl BrokerStateMachine {
     fn require_group_member(
         &self,
         group_id: &ConsumerGroupId,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
         expected_generation: Generation,
     ) -> Result<(NamespaceId, Generation), StateMachineError> {
-        let group = self
-            .state
-            .groups
-            .get(group_id)
-            .ok_or_else(|| StateMachineError::ConsumerGroupNotFound(group_id.clone()))?;
-        if group.generation() != expected_generation {
-            return Err(StateMachineError::ConsumerGroupTransition(
-                ConsumerGroupError::StaleGeneration {
-                    expected: expected_generation,
-                    actual: group.generation(),
-                },
-            ));
-        }
-        if group.member(member_id).is_none() {
-            return Err(StateMachineError::ConsumerGroupTransition(
-                ConsumerGroupError::MemberNotFound(member_id.clone()),
-            ));
-        }
-        Ok((group.namespace_id().clone(), group.generation()))
+        GroupCoordinator::require_member(
+            &self.state.groups,
+            group_id,
+            member_id,
+            expected_generation,
+        )
+        .map_err(StateMachineError::from)
     }
 
     fn checked_deadline(
@@ -1387,7 +1421,7 @@ impl BrokerStateMachine {
     fn remove_member_lease_task(
         &mut self,
         group_id: &ConsumerGroupId,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
         task_id: &TaskId,
     ) {
         let key = (group_id.clone(), member_id.clone());
@@ -1403,7 +1437,7 @@ impl BrokerStateMachine {
     fn preflight_member_lease_requeue(
         &self,
         group_id: &ConsumerGroupId,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
     ) -> Result<(), StateMachineError> {
         let key = (group_id.clone(), member_id.clone());
         let Some(task_ids) = self.member_lease_tasks.get(&key) else {
@@ -1426,7 +1460,7 @@ impl BrokerStateMachine {
     fn requeue_member_leases(
         &mut self,
         group_id: &ConsumerGroupId,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
     ) -> Result<usize, StateMachineError> {
         let key = (group_id.clone(), member_id.clone());
         let task_ids = self.member_lease_tasks.remove(&key).unwrap_or_default();
@@ -1487,7 +1521,7 @@ impl BrokerStateMachine {
             group_id: group.group_id().clone(),
             generation: group.generation(),
             group_revision: group.revision(),
-            member_count: group.member_count(),
+            member_count: group.consumer_count(),
         }
     }
 
@@ -1521,8 +1555,8 @@ mod tests {
     };
     use crate::results::BrokerMutationResult;
     use crate::{
-        Capabilities, ConsumerGroupError, ConsumerGroupId, Generation, LeaseEpoch, LeaseId,
-        MemberId, NamespaceId, TaskId, TaskObjective, TaskResult, TaskState, TaskStatus,
+        Capabilities, ConsumerGroupError, ConsumerGroupId, ConsumerId, Generation, LeaseEpoch,
+        LeaseId, NamespaceId, TaskId, TaskObjective, TaskResult, TaskState, TaskStatus,
         TaskTransitionError, Term, TimestampMs,
     };
 
@@ -1556,7 +1590,7 @@ mod tests {
 
     fn join_worker(
         machine: &mut BrokerStateMachine,
-        member_id: &MemberId,
+        member_id: &ConsumerId,
     ) -> Result<(ConsumerGroupId, Generation), Box<dyn Error>> {
         let group_id = ensure_group(machine)?;
         let joined = machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
@@ -1747,7 +1781,7 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let mut machine = BrokerStateMachine::default();
         let group_id = ensure_group(&mut machine)?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let capabilities = Capabilities::new(["review", "code", "review"])?;
         let before_join_revision = machine.state().revision();
 
@@ -1830,7 +1864,7 @@ mod tests {
     fn stale_generation_is_rejected_and_leave_advances_generation() -> Result<(), Box<dyn Error>> {
         let mut machine = BrokerStateMachine::default();
         let group_id = ensure_group(&mut machine)?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
             group_id: group_id.clone(),
             member_id: member_id.clone(),
@@ -1879,7 +1913,7 @@ mod tests {
         let group_id = ConsumerGroupId::new("missing")?;
         let join = machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
             group_id: group_id.clone(),
-            member_id: MemberId::new("worker-a")?,
+            member_id: ConsumerId::new("worker-a")?,
             capabilities: Capabilities::new(["code"])?,
             now_ms: TimestampMs::new(1_000),
             max_group_members: 256,
@@ -1916,7 +1950,7 @@ mod tests {
         ] {
             machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
                 group_id: group_id.clone(),
-                member_id: MemberId::new(member_id)?,
+                member_id: ConsumerId::new(member_id)?,
                 capabilities: Capabilities::new(["code"])?,
                 now_ms: TimestampMs::new(heartbeat_ms),
                 max_group_members: 256,
@@ -1941,8 +1975,8 @@ mod tests {
             .group(&group_a)
             .map(|group| {
                 group
-                    .members()
-                    .map(|member| member.member_id().as_str())
+                    .consumers()
+                    .map(|member| member.consumer_id().as_str())
                     .collect::<Vec<_>>()
             })
             .ok_or("group-a must exist")?;
@@ -1951,8 +1985,8 @@ mod tests {
             .group(&group_b)
             .map(|group| {
                 group
-                    .members()
-                    .map(|member| member.member_id().as_str())
+                    .consumers()
+                    .map(|member| member.consumer_id().as_str())
                     .collect::<Vec<_>>()
             })
             .ok_or("group-b must exist")?;
@@ -1966,7 +2000,7 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let mut machine = BrokerStateMachine::default();
         let group_id = ensure_group(&mut machine)?;
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let capabilities = Capabilities::new(["code"])?;
         machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
             group_id: group_id.clone(),
@@ -1999,7 +2033,7 @@ mod tests {
             machine
                 .state()
                 .group(&group_id)
-                .map(crate::ConsumerGroup::member_count),
+                .map(crate::ConsumerGroup::consumer_count),
             Some(1)
         );
         Ok(())
@@ -2009,7 +2043,7 @@ mod tests {
     fn claim_uses_oldest_ready_task_and_is_idempotent_for_same_active_lease()
     -> Result<(), Box<dyn Error>> {
         let mut machine = BrokerStateMachine::default();
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let (group_id, generation) = join_worker(&mut machine, &member_id)?;
         let newer = publish_task(&mut machine, "task-newer", 2_000)?;
         let older = publish_task(&mut machine, "task-older", 1_000)?;
@@ -2057,8 +2091,8 @@ mod tests {
     fn claim_rejects_stale_term_generation_and_duplicate_lease_owner() -> Result<(), Box<dyn Error>>
     {
         let mut machine = BrokerStateMachine::default();
-        let worker_a = MemberId::new("worker-a")?;
-        let worker_b = MemberId::new("worker-b")?;
+        let worker_a = ConsumerId::new("worker-a")?;
+        let worker_b = ConsumerId::new("worker-b")?;
         let (group_id, _first_generation) = join_worker(&mut machine, &worker_a)?;
         let joined_b =
             machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
@@ -2131,7 +2165,7 @@ mod tests {
     fn expired_lease_requeues_and_reclaims_with_one_global_revision_and_next_epoch()
     -> Result<(), Box<dyn Error>> {
         let mut machine = BrokerStateMachine::default();
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let (group_id, generation) = join_worker(&mut machine, &member_id)?;
         let task_id = publish_task(&mut machine, "task-1", 1_500)?;
         machine.apply(BrokerCommand::ClaimTask(ClaimTaskCommand {
@@ -2176,7 +2210,7 @@ mod tests {
     fn renew_keeps_epoch_and_stale_expiration_heap_entry_cannot_requeue()
     -> Result<(), Box<dyn Error>> {
         let mut machine = BrokerStateMachine::default();
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let (group_id, generation) = join_worker(&mut machine, &member_id)?;
         let task_id = publish_task(&mut machine, "task-1", 1_500)?;
         let lease_id = LeaseId::new("lease-1")?;
@@ -2236,7 +2270,7 @@ mod tests {
     #[test]
     fn complete_is_fenced_and_identical_retry_does_not_mutate() -> Result<(), Box<dyn Error>> {
         let mut machine = BrokerStateMachine::default();
-        let member_id = MemberId::new("worker-a")?;
+        let member_id = ConsumerId::new("worker-a")?;
         let (group_id, generation) = join_worker(&mut machine, &member_id)?;
         let task_id = publish_task(&mut machine, "task-1", 1_500)?;
         let lease_id = LeaseId::new("lease-1")?;

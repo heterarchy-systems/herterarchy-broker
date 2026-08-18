@@ -7,14 +7,15 @@ use agent_broker_domain::commands::{
 };
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerStateMachine, Capabilities, ConsumerGroupId, Generation, LeaseId, MemberId, NamespaceId,
-    StateMachineError, TaskId, TaskObjective, TaskResult, TaskStatus, Term, TimestampMs,
+    BrokerStateMachine, Capabilities, ConsumerGroupId, ConsumerId, Generation, LeaseId,
+    NamespaceId, StateMachineError, TaskId, TaskObjective, TaskResult, TaskStatus, Term,
+    TimestampMs,
 };
 
 struct ReadyWorker {
     namespace_id: NamespaceId,
     group_id: ConsumerGroupId,
-    member_id: MemberId,
+    member_id: ConsumerId,
     generation: Generation,
 }
 
@@ -32,7 +33,7 @@ fn setup_worker(machine: &mut BrokerStateMachine) -> Result<ReadyWorker, Box<dyn
             max_namespace_groups: 8,
         },
     ))?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     let joined = machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
         group_id: group_id.clone(),
         member_id: member_id.clone(),

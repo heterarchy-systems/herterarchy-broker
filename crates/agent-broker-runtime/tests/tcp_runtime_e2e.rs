@@ -17,8 +17,8 @@ use agent_broker_consensus::StandaloneConsensusAdapter;
 use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerCapacityPolicy, ConsumerGroupId, LeaseDurationMs, LeaseId, MemberId, NamespaceId, TaskId,
-    TaskObjective, TaskResult, TaskStatus, Term,
+    BrokerCapacityPolicy, ConsumerGroupId, ConsumerId, LeaseDurationMs, LeaseId, NamespaceId,
+    TaskId, TaskObjective, TaskResult, TaskStatus, Term,
 };
 use agent_broker_protocol::{BrokerRequestDispatcher, DeclaredCapabilities};
 use agent_broker_runtime::{
@@ -324,7 +324,7 @@ fn reusable_tcp_connection_runs_full_typed_lifecycle_through_durable_state_owner
     )?;
     let group_id = ConsumerGroupId::new("engineering")?;
     client.ensure_consumer_group(namespace_id, group_id.clone())?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     let joined = client.join_consumer_group(
         group_id.clone(),
         member_id.clone(),
@@ -377,7 +377,7 @@ fn stale_fence_returns_typed_broker_error_without_breaking_connection() -> Resul
     client.ensure_namespace(namespace_id.clone())?;
     let group_id = ConsumerGroupId::new("engineering")?;
     client.ensure_consumer_group(namespace_id, group_id.clone())?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     let joined = client.join_consumer_group(
         group_id.clone(),
         member_id.clone(),

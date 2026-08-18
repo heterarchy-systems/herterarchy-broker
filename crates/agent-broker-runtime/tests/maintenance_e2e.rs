@@ -9,8 +9,8 @@ use agent_broker_consensus::StandaloneConsensusAdapter;
 use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerCapacityPolicy, ConsumerGroupId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId,
-    MemberId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
+    BrokerCapacityPolicy, ConsumerGroupId, ConsumerId, Generation, LeaseDurationMs, LeaseEpoch,
+    LeaseId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 use agent_broker_protocol::{
     BrokerRequest, BrokerRequestDispatcher, BrokerResponse, ClaimTaskRequest, CompleteTaskRequest,
@@ -86,7 +86,7 @@ fn dispatch(
 
 fn bootstrap_member(
     owner: &StateOwnerHandle,
-) -> Result<(NamespaceId, ConsumerGroupId, MemberId, Generation), Box<dyn Error>> {
+) -> Result<(NamespaceId, ConsumerGroupId, ConsumerId, Generation), Box<dyn Error>> {
     let namespace_id = NamespaceId::new("project-a")?;
     dispatch(
         owner,
@@ -106,7 +106,7 @@ fn bootstrap_member(
         }),
         600,
     )?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     let joined = dispatch(
         owner,
         BrokerRequest::JoinConsumerGroup(JoinConsumerGroupRequest {
@@ -158,7 +158,7 @@ fn maintenance_reaps_stale_member_and_requeues_owned_lease() -> Result<(), Box<d
     assert_eq!(result.reaped_stale_members, 1);
     assert_eq!(result.pruned_completed_tasks, 0);
 
-    let member_b = MemberId::new("worker-b")?;
+    let member_b = ConsumerId::new("worker-b")?;
     let joined_b = dispatch(
         &owner,
         BrokerRequest::JoinConsumerGroup(JoinConsumerGroupRequest {

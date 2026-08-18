@@ -8,7 +8,13 @@ import time
 import unittest
 from pathlib import Path
 
-from agent_broker import BrokerClientConfig, StandaloneBrokerClient, TransportError
+from agent_broker import (
+    BrokerClientConfig,
+    BrokerOperationsClient,
+    OperationsClientConfig,
+    StandaloneBrokerClient,
+    TransportError,
+)
 
 
 @unittest.skipUnless(
@@ -35,6 +41,9 @@ class RustStandaloneIntegrationTests(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            operations_port = probe.getsockname()[1]
         with tempfile.TemporaryDirectory(prefix="agent-broker-python-sdk-") as temp_dir:
             state_path = Path(temp_dir) / "state"
             command = [
@@ -44,6 +53,8 @@ class RustStandaloneIntegrationTests(unittest.TestCase):
                 "127.0.0.1",
                 "--port",
                 str(port),
+                "--operations-port",
+                str(operations_port),
                 "--state-path",
                 str(state_path),
             ]
@@ -90,6 +101,9 @@ class RustStandaloneIntegrationTests(unittest.TestCase):
             client = StandaloneBrokerClient(
                 BrokerClientConfig(port=port, timeout_seconds=1.0)
             )
+            operations = BrokerOperationsClient(
+                OperationsClientConfig(port=operations_port, timeout_seconds=1.0)
+            )
             try:
                 health = wait_for_health(process, client)
                 self.assertEqual(health.protocol_version, 1)
@@ -98,8 +112,22 @@ class RustStandaloneIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(namespace.namespace_id, "python-sdk-integration")
                 self.assertGreaterEqual(namespace.revision, 1)
+                group = client.ensure_group(
+                    namespace_id="python-sdk-integration",
+                    group_id="sdk-company",
+                )
+                client.join_group(
+                    group_id="sdk-company",
+                    member_id="consumer-a",
+                    capabilities=("python", "test"),
+                )
+                description = operations.describe_group("sdk-company")
+                self.assertEqual(description.group.group_id, "sdk-company")
+                self.assertEqual(description.group.consumer_count, 1)
+                page = operations.list_groups(limit=8)
+                self.assertIn(description.group, page.groups)
 
-                committed_revision = namespace.revision
+                committed_revision = group.revision + 1
                 client.close()
                 stop_broker(process)
 
@@ -109,6 +137,8 @@ class RustStandaloneIntegrationTests(unittest.TestCase):
                 )
                 recovered_health = wait_for_health(process, client)
                 self.assertGreaterEqual(recovered_health.revision, committed_revision)
+                recovered_description = operations.describe_group("sdk-company")
+                self.assertEqual(recovered_description.group.consumer_count, 1)
 
                 recovered_namespace = client.ensure_namespace(
                     namespace_id="python-sdk-integration",

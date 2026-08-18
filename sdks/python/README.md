@@ -28,6 +28,7 @@ The SDK intentionally mirrors the Rust protocol/client safety boundary:
 - optional retries resend the exact same serialized frame only after transport failure or a v3 `UNKNOWN` disposition;
 - `COMMITTED`, `REJECTED`, and `UNKNOWN` are exposed as typed error dispositions.
 - synchronous and native-`asyncio` clients are both supported; async networking uses `asyncio` streams directly and does not wrap the synchronous socket client in worker threads.
+- `BrokerOperationsClient` and `AsyncBrokerOperationsClient` use the separate read-only operations endpoint for authoritative Consumer Group discovery without mutating Broker state.
 
 ## Local use
 
@@ -48,6 +49,22 @@ with StandaloneBrokerClient() as client:
 ```
 
 Standalone protocol-v1 mutations are sent exactly once. The SDK does not automatically retry an ambiguous standalone mutation.
+
+Broker-authoritative Group inspection is intentionally separate from mutation clients:
+
+```python
+from agent_broker import BrokerOperationsClient
+
+operations = BrokerOperationsClient()
+page = operations.list_groups(limit=8)
+company = operations.describe_group("backend-company")
+print(page.groups)
+print(company.group.consumer_count)
+```
+
+Standalone defaults to Broker protocol port `8811` and operations port `8812`. `list_groups()` is
+bounded and cursor-based; cluster deployments only return authoritative Group reads from a current
+leader that can prove quorum/linearizable read authority.
 
 For a three-node cluster, use `ClusterBrokerClient` (alias of `StaticClusterBrokerClient`) with explicit owner acquisition and `CommandIdentity`. `BrokerClient` is the lower-level direct-node client; it does not perform cluster discovery. A caller that wants to issue sequence `2` must persist/decide that transition itself after interpreting the prior outcome. The SDK deliberately does not hide that durability boundary.
 

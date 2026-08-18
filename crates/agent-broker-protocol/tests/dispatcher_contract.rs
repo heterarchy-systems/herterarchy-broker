@@ -4,8 +4,8 @@ use agent_broker_application::{BrokerApplicationService, BrokerError, ConsensusA
 use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerCapacityPolicy, BrokerStateMachine, ConsumerGroupId, Generation, LeaseDurationMs,
-    LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult,
+    BrokerCapacityPolicy, BrokerStateMachine, ConsumerGroupId, ConsumerId, Generation,
+    LeaseDurationMs, LeaseEpoch, LeaseId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult,
     TaskStatus, Term, TimestampMs,
 };
 use agent_broker_protocol::{
@@ -41,7 +41,7 @@ struct Fixture {
     dispatcher: BrokerRequestDispatcher<MemoryConsensus>,
     namespace_id: NamespaceId,
     group_id: ConsumerGroupId,
-    member_id: MemberId,
+    member_id: ConsumerId,
     task_id: TaskId,
 }
 
@@ -52,7 +52,7 @@ fn fixture() -> Result<Fixture, Box<dyn Error>> {
         dispatcher: BrokerRequestDispatcher::new(service),
         namespace_id: NamespaceId::new("project-a")?,
         group_id: ConsumerGroupId::new("engineering")?,
-        member_id: MemberId::new("worker-a")?,
+        member_id: ConsumerId::new("worker-a")?,
         task_id: TaskId::new("task-1")?,
     })
 }

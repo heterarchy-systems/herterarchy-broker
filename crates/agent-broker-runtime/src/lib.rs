@@ -12,7 +12,7 @@ mod tcp_server;
 pub use error::RuntimeError;
 pub use operations::{
     ClusterOperationsObserver, ClusterOperationsReason, ClusterOperationsSnapshot,
-    OperationsBindPolicy, OperationsServer, OperationsServerConfig,
+    OperationsBindPolicy, OperationsServer, OperationsServerConfig, StandaloneOperationsObserver,
 };
 pub use standalone_maintenance::{
     LeaderMaintenanceResult, LeaderMaintenanceRunner, MaintenanceRunError,

@@ -1,4 +1,4 @@
-"""Compatibility namespace for the canonical native-asyncio standalone client."""
+"""Convenience namespace for the canonical native-asyncio standalone client."""
 
 from ..async_standalone import AsyncStandaloneBrokerClient
 

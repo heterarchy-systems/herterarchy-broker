@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread;
 
-use agent_broker_application::ConsensusAdapter;
-use agent_broker_domain::TimestampMs;
+use agent_broker_application::{BrokerError, ConsensusAdapter};
+use agent_broker_domain::{ConsumerGroupDirectory, TimestampMs};
 use agent_broker_protocol::{
     BrokerRequest, BrokerRequestDispatcher, BrokerResponse, BrokerWireRequest,
 };
@@ -33,10 +33,15 @@ struct LeaderMaintenanceJob {
     reply: SyncSender<Result<LeaderMaintenanceResult, agent_broker_application::BrokerError>>,
 }
 
+struct GroupDirectoryJob {
+    reply: SyncSender<Result<ConsumerGroupDirectory, BrokerError>>,
+}
+
 enum StateOwnerJob {
     Dispatch(DispatchJob),
     Maintenance(MaintenanceJob),
     LeaderMaintenance(LeaderMaintenanceJob),
+    GroupDirectory(GroupDirectoryJob),
 }
 
 /// Cloneable bounded submission handle to the single mutable Broker state owner.
@@ -135,6 +140,10 @@ impl StateOwnerHandle {
                                 run_once_if_authoritative(&mut dispatcher, job.policy, job.now_ms);
                             let _ = job.reply.send(result);
                         }
+                        StateOwnerJob::GroupDirectory(job) => {
+                            let result = dispatcher.application_service_mut().group_directory();
+                            let _ = job.reply.send(result);
+                        }
                     }
                     owner_load.active_jobs.store(0, Ordering::Release);
                 }
@@ -155,6 +164,27 @@ impl StateOwnerHandle {
             queued_jobs: self.load.queued_jobs.load(Ordering::Acquire),
             capacity: self.capacity,
         }
+    }
+
+    /// Return one authoritative read-only Consumer Group directory through the single state-owner
+    /// ordering boundary.
+    ///
+    /// The outer [`Result`] describes runtime queue/owner availability. The inner [`Result`]
+    /// preserves Broker read-authority errors such as cluster follower/quorum rejection without
+    /// flattening them into runtime failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the bounded state-owner queue cannot accept the read or the
+    /// owner thread drops the reply.
+    pub fn group_directory(
+        &self,
+    ) -> Result<Result<ConsumerGroupDirectory, BrokerError>, RuntimeError> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.try_send(StateOwnerJob::GroupDirectory(GroupDirectoryJob { reply }))?;
+        receiver
+            .recv()
+            .map_err(|_| RuntimeError::StateOwnerReplyDropped)
     }
 
     /// Dispatch one request through the single state owner and wait for its typed response.

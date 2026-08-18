@@ -20,7 +20,8 @@ use agent_broker_protocol::BrokerRequestDispatcher;
 use agent_broker_runtime::{
     BrokerBindPolicy, BrokerServerConfig, BrokerStateProcessLock, ClusterOperationsObserver,
     LeaderMaintenanceRunner, OperationsBindPolicy, OperationsServer, OperationsServerConfig,
-    StandaloneMaintenancePolicy, StandaloneMaintenanceRunner, StateOwnerHandle, TcpBrokerServer,
+    StandaloneMaintenancePolicy, StandaloneMaintenanceRunner, StandaloneOperationsObserver,
+    StateOwnerHandle, TcpBrokerServer,
 };
 use agent_broker_storage::{JournalCompactionPolicy, JournaledBrokerStateRepository};
 use clap::{Args, Parser, Subcommand};
@@ -94,6 +95,8 @@ struct ServeArgs {
     host: IpAddr,
     #[arg(long, default_value_t = DEFAULT_PORT)]
     port: u16,
+    #[arg(long, default_value_t = DEFAULT_OPERATIONS_PORT)]
+    operations_port: u16,
     /// Permit the configured listener on a container bridge interface.
     #[arg(long, default_value_t = false)]
     container_bridge_bind: bool,
@@ -235,16 +238,35 @@ fn serve(args: ServeArgs) -> Result<(), Box<dyn Error>> {
             max_connections: args.max_connections,
             connection_io_timeout: BrokerServerConfig::default().connection_io_timeout,
         },
-        state_owner,
+        state_owner.clone(),
         bind_policy,
     )?;
+    let server_observer = server.observer();
+    let operations_observer = StandaloneOperationsObserver::new(state_owner, server_observer);
+    let operations_bind_policy = if args.container_bridge_bind {
+        OperationsBindPolicy::ContainerBridge
+    } else {
+        OperationsBindPolicy::LocalOnly
+    };
+    let operations_server = OperationsServer::bind_standalone_with_policy(
+        OperationsServerConfig {
+            address: SocketAddr::new(args.host, args.operations_port),
+            ..OperationsServerConfig::default()
+        },
+        operations_observer,
+        operations_bind_policy,
+    )?;
     let address = server.local_addr()?;
+    let operations_address = operations_server.local_addr()?;
     println!(
         "{}",
         json!({
             "event": "broker_ready",
+            "mode": "standalone",
             "host": address.ip().to_string(),
             "port": address.port(),
+            "operations_host": operations_address.ip().to_string(),
+            "operations_port": operations_address.port(),
             "term": initial_term.get(),
             "revision": initial_revision.get(),
             "runtime": "rust",
@@ -253,10 +275,24 @@ fn serve(args: ServeArgs) -> Result<(), Box<dyn Error>> {
     io::stdout().flush()?;
     let stop = Arc::new(AtomicBool::new(false));
     let maintenance_handle = maintenance.spawn(Arc::clone(&stop))?;
+    let operations_stop = Arc::clone(&stop);
+    let operations_handle = thread::Builder::new()
+        .name("agent-broker-operations".to_owned())
+        .spawn(move || {
+            let result = operations_server.serve_until(operations_stop.as_ref());
+            if result.is_err() {
+                operations_stop.store(true, Ordering::Release);
+            }
+            result
+        })?;
     let server_result = server.serve_until(stop.as_ref());
     stop.store(true, Ordering::Release);
     if maintenance_handle.join().is_err() {
         return Err("standalone maintenance thread panicked".into());
+    }
+    match operations_handle.join() {
+        Ok(result) => result?,
+        Err(_) => return Err("operations server thread panicked".into()),
     }
     server_result?;
     Ok(())

@@ -17,8 +17,8 @@ use agent_broker_domain::commands::{
 };
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerCheckpoint, BrokerState, Capabilities, ConsumerGroupId, Generation, LeaseEpoch, LeaseId,
-    MemberId, NamespaceId, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
+    BrokerCheckpoint, BrokerState, Capabilities, ConsumerGroupId, ConsumerId, Generation,
+    LeaseEpoch, LeaseId, NamespaceId, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 use agent_broker_storage::{BrokerStateRepository, RepositoryError};
 use tempfile::tempdir;
@@ -127,7 +127,7 @@ struct RestartFixture {
     initial_term: Term,
     task_id: TaskId,
     group_id: ConsumerGroupId,
-    member_id: MemberId,
+    member_id: ConsumerId,
     lease_id: LeaseId,
     generation: Generation,
     lease_epoch: LeaseEpoch,
@@ -140,7 +140,7 @@ fn prepare_restart_fixture(
     let namespace_id = NamespaceId::new("project-restart")?;
     let task_id = TaskId::new("task-before-restart")?;
     let group_id = ConsumerGroupId::new("workers-restart")?;
-    let member_id = MemberId::new("worker-restart")?;
+    let member_id = ConsumerId::new("worker-restart")?;
     let lease_id = LeaseId::new("lease-before-restart")?;
 
     raft.propose(BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {
@@ -425,7 +425,7 @@ fn lifecycle_commands(term: Term) -> Result<Vec<BrokerCommand>, Box<dyn Error>> 
     let namespace_id = NamespaceId::new("project-a")?;
     let task_id = TaskId::new("task-1")?;
     let group_id = ConsumerGroupId::new("workers")?;
-    let member_id = MemberId::new("worker-1")?;
+    let member_id = ConsumerId::new("worker-1")?;
     let lease_id = LeaseId::new("lease-1")?;
     let generation = Generation::new(1);
     let lease_epoch = LeaseEpoch::new(1);

@@ -13,7 +13,7 @@ use agent_broker_application::{
 };
 use agent_broker_domain::commands::{AdvanceTermCommand, BrokerCommand};
 use agent_broker_domain::results::BrokerMutationResult;
-use agent_broker_domain::{BrokerState, Revision, Term};
+use agent_broker_domain::{BrokerState, ConsumerGroupDirectory, Revision, Term};
 use openraft::error::{CheckIsLeaderError, RaftError};
 use openraft::raft::Raft;
 use openraft::{BasicNode, Config, SnapshotPolicy};
@@ -620,6 +620,12 @@ impl ConsensusAdapter for ClusterRaftConsensusAdapter {
         self.observation.revision()
     }
 
+    fn group_directory(&mut self) -> Result<ConsumerGroupDirectory, BrokerError> {
+        self.ensure_available()?;
+        let deadline = Instant::now() + DEFAULT_READINESS_PROBE_TIMEOUT;
+        self.request(|reply| ControllerRequest::GroupDirectory { deadline, reply })?
+    }
+
     fn maintenance_authority(&mut self) -> Result<bool, BrokerError> {
         let progress = self.progress()?;
         Ok(progress.current_leader == Some(self.node_id))
@@ -741,6 +747,10 @@ enum ControllerRequest {
         deadline: Instant,
         reply: SyncSender<ClusterRaftReadiness>,
     },
+    GroupDirectory {
+        deadline: Instant,
+        reply: SyncSender<Result<ConsumerGroupDirectory, BrokerError>>,
+    },
     Shutdown {
         reply: SyncSender<Result<(), BrokerError>>,
     },
@@ -826,6 +836,10 @@ fn run_controller(
                     continue;
                 }
                 let result = runtime.block_on(running.readiness(deadline));
+                let _send_result = reply.send(result);
+            }
+            ControllerRequest::GroupDirectory { deadline, reply } => {
+                let result = runtime.block_on(running.group_directory(deadline));
                 let _send_result = reply.send(result);
             }
             ControllerRequest::Shutdown { reply } => {
@@ -1200,6 +1214,23 @@ impl RunningClusterRaft {
                 Some(initial_progress),
             ),
         }
+    }
+
+    async fn group_directory(
+        &self,
+        deadline: Instant,
+    ) -> Result<ConsumerGroupDirectory, BrokerError> {
+        let readiness = self.readiness(deadline).await;
+        if readiness.status == ClusterRaftReadinessStatus::Ready {
+            return Ok(self.observation.group_directory());
+        }
+        Err(BrokerError::new(
+            BrokerErrorCode::TransportError,
+            format!(
+                "Consumer Group directory read is unavailable: {}",
+                readiness.status.as_str()
+            ),
+        ))
     }
 
     async fn progress(&self) -> Result<ClusterRaftProgress, BrokerError> {

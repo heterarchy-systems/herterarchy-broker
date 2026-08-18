@@ -18,10 +18,10 @@ pub use checkpoint::{
 };
 pub use fencing::{FencingValueError, Generation, LeaseEpoch, Revision, Term};
 pub use group::{
-    Capabilities, CapabilitiesError, Capability, ConsumerGroup, ConsumerGroupError,
-    HeartbeatOutcome, JoinOutcome, Member,
+    Capabilities, CapabilitiesError, Capability, Consumer, ConsumerGroup, ConsumerGroupDirectory,
+    ConsumerGroupError, ConsumerGroupSummary, HeartbeatOutcome, JoinOutcome,
 };
-pub use identifiers::{ConsumerGroupId, IdentifierError, LeaseId, MemberId, NamespaceId, TaskId};
+pub use identifiers::{ConsumerGroupId, ConsumerId, IdentifierError, LeaseId, NamespaceId, TaskId};
 pub use policy::{
     BrokerCapacityPolicy, LeaseDurationMs, PolicyError, PruneTaskLimit, ReapMemberLimit,
 };

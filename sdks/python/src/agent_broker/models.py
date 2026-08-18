@@ -6,6 +6,9 @@ from ipaddress import ip_address
 DEFAULT_MAX_FRAME_BYTES = 128 * 1024
 MIN_MAX_FRAME_BYTES = 4 * 1024
 MAX_MAX_FRAME_BYTES = 1024 * 1024
+DEFAULT_OPERATIONS_MAX_FRAME_BYTES = 16 * 1024
+MIN_OPERATIONS_MAX_FRAME_BYTES = 256
+MAX_OPERATIONS_MAX_FRAME_BYTES = 16 * 1024
 
 
 def _positive_int(value: int, label: str) -> None:
@@ -91,6 +94,54 @@ class BrokerClientConfig:
             <= MAX_MAX_FRAME_BYTES
         ):
             raise ValueError("max_response_frame_bytes must be in 4096..=1048576")
+
+
+@dataclass(frozen=True, slots=True)
+class OperationsClientConfig:
+    """Read-only operations transport configuration.
+
+    Args:
+        host: Literal loopback IP address.
+        port: Read-only operations TCP port.
+        timeout_seconds: Connect/read/write timeout.
+        max_response_frame_bytes: Maximum accepted response frame size.
+
+    Returns:
+        None: No value.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8812
+    timeout_seconds: float = 2.0
+    max_response_frame_bytes: int = DEFAULT_OPERATIONS_MAX_FRAME_BYTES
+
+    def __post_init__(self) -> None:
+        """Validate operations transport bounds."""
+
+        try:
+            address = ip_address(self.host)
+        except ValueError as error:
+            raise ValueError("host must be a literal loopback IP address") from error
+        if not address.is_loopback:
+            raise ValueError("host must be a loopback IP address")
+        if (
+            isinstance(self.port, bool)
+            or not isinstance(self.port, int)
+            or not 1 <= self.port <= 65535
+        ):
+            raise ValueError("port must be in 1..=65535")
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be positive")
+        if (
+            not MIN_OPERATIONS_MAX_FRAME_BYTES
+            <= self.max_response_frame_bytes
+            <= MAX_OPERATIONS_MAX_FRAME_BYTES
+        ):
+            raise ValueError("max_response_frame_bytes must be in 256..=16384")
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,6 +508,36 @@ class TaskCompletedResult:
     task_id: str
     task_revision: int
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumerGroupSummary:
+    """Authoritative read-only Consumer Group summary."""
+
+    group_id: str
+    namespace_id: str
+    generation: int
+    group_revision: int
+    consumer_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumerGroupDescription:
+    """Authoritative single-group operations response."""
+
+    broker_term: int
+    broker_revision: int
+    group: ConsumerGroupSummary
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumerGroupPage:
+    """Bounded authoritative Consumer Group directory page."""
+
+    broker_term: int
+    broker_revision: int
+    groups: tuple[ConsumerGroupSummary, ...]
+    next_after_group_id: str | None
 
 
 BrokerResult = (

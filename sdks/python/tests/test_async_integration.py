@@ -53,7 +53,7 @@ class AsyncRustStandaloneIntegrationTests(unittest.IsolatedAsyncioTestCase):
         repo = Path(__file__).resolve().parents[3]
         binary = repo / "target" / "debug" / "agentbrokerd"
         self.assertTrue(binary.is_file(), f"prebuilt Rust Broker is missing: {binary}")
-        port = _reserve_loopback_ports(1)[0]
+        port, operations_port = _reserve_loopback_ports(2)
 
         with tempfile.TemporaryDirectory(
             prefix="agent-broker-python-async-sdk-"
@@ -66,6 +66,8 @@ class AsyncRustStandaloneIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 "127.0.0.1",
                 "--port",
                 str(port),
+                "--operations-port",
+                str(operations_port),
                 "--state-path",
                 str(state_path),
             )

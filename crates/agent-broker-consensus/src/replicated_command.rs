@@ -8,8 +8,8 @@ use agent_broker_domain::commands::{
     ReapStaleMembersCommand, RenewTaskLeaseCommand,
 };
 use agent_broker_domain::{
-    Capabilities, ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, TaskId,
-    TaskObjective, TaskResult, Term, TimestampMs,
+    Capabilities, ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId,
+    TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -439,7 +439,7 @@ impl TryFrom<ReplicatedBrokerCommandV1> for BrokerCommand {
                 lease_duration_ms,
             } => Ok(Self::ClaimTask(ClaimTaskCommand {
                 group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
+                member_id: ConsumerId::new(member_id).map_err(validation_error)?,
                 expected_term: Term::new(expected_term).map_err(validation_error)?,
                 expected_generation: Generation::new(expected_generation),
                 lease_id: LeaseId::new(lease_id).map_err(validation_error)?,
@@ -459,7 +459,7 @@ impl TryFrom<ReplicatedBrokerCommandV1> for BrokerCommand {
             } => Ok(Self::RenewTaskLease(RenewTaskLeaseCommand {
                 task_id: TaskId::new(task_id).map_err(validation_error)?,
                 group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
+                member_id: ConsumerId::new(member_id).map_err(validation_error)?,
                 expected_term: Term::new(expected_term).map_err(validation_error)?,
                 expected_generation: Generation::new(expected_generation),
                 expected_lease_epoch: LeaseEpoch::new(expected_lease_epoch),
@@ -480,7 +480,7 @@ impl TryFrom<ReplicatedBrokerCommandV1> for BrokerCommand {
             } => Ok(Self::CompleteTask(CompleteTaskCommand {
                 task_id: TaskId::new(task_id).map_err(validation_error)?,
                 group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
+                member_id: ConsumerId::new(member_id).map_err(validation_error)?,
                 expected_term: Term::new(expected_term).map_err(validation_error)?,
                 expected_generation: Generation::new(expected_generation),
                 expected_lease_epoch: LeaseEpoch::new(expected_lease_epoch),
@@ -555,7 +555,7 @@ fn convert_coordination_command(
             max_group_members,
         } => Ok(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
             group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-            member_id: MemberId::new(member_id).map_err(validation_error)?,
+            member_id: ConsumerId::new(member_id).map_err(validation_error)?,
             capabilities: Capabilities::new(capabilities).map_err(validation_error)?,
             now_ms: TimestampMs::new(now_ms),
             max_group_members: u64_to_usize(max_group_members, "max_group_members")?,
@@ -567,7 +567,7 @@ fn convert_coordination_command(
             now_ms,
         } => Ok(BrokerCommand::Heartbeat(HeartbeatCommand {
             group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-            member_id: MemberId::new(member_id).map_err(validation_error)?,
+            member_id: ConsumerId::new(member_id).map_err(validation_error)?,
             expected_generation: Generation::new(expected_generation),
             now_ms: TimestampMs::new(now_ms),
         })),
@@ -578,7 +578,7 @@ fn convert_coordination_command(
         } => Ok(BrokerCommand::LeaveConsumerGroup(
             LeaveConsumerGroupCommand {
                 group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
+                member_id: ConsumerId::new(member_id).map_err(validation_error)?,
                 expected_generation: Generation::new(expected_generation),
             },
         )),

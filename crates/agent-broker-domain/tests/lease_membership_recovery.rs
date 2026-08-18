@@ -7,13 +7,13 @@ use agent_broker_domain::commands::{
 };
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerStateMachine, Capabilities, ConsumerGroupId, LeaseEpoch, LeaseId, MemberId, NamespaceId,
-    TaskId, TaskObjective, TaskResult, TaskStatus, Term, TimestampMs,
+    BrokerStateMachine, Capabilities, ConsumerGroupId, ConsumerId, LeaseEpoch, LeaseId,
+    NamespaceId, TaskId, TaskObjective, TaskResult, TaskStatus, Term, TimestampMs,
 };
 
 fn setup_group(
     machine: &mut BrokerStateMachine,
-    first_member: &MemberId,
+    first_member: &ConsumerId,
 ) -> Result<(ConsumerGroupId, agent_broker_domain::Generation), Box<dyn Error>> {
     let namespace_id = NamespaceId::new("project-a")?;
     machine.apply(BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {
@@ -56,7 +56,7 @@ fn publish(machine: &mut BrokerStateMachine) -> Result<TaskId, Box<dyn Error>> {
 #[test]
 fn leave_requeues_member_owned_lease_and_next_claim_advances_epoch() -> Result<(), Box<dyn Error>> {
     let mut machine = BrokerStateMachine::default();
-    let worker_a = MemberId::new("worker-a")?;
+    let worker_a = ConsumerId::new("worker-a")?;
     let (group_id, generation) = setup_group(&mut machine, &worker_a)?;
     let task_id = publish(&mut machine)?;
     machine.apply(BrokerCommand::ClaimTask(ClaimTaskCommand {
@@ -103,7 +103,7 @@ fn leave_requeues_member_owned_lease_and_next_claim_advances_epoch() -> Result<(
     }));
     assert!(stale.is_err());
 
-    let worker_b = MemberId::new("worker-b")?;
+    let worker_b = ConsumerId::new("worker-b")?;
     let joined = machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
         group_id: group_id.clone(),
         member_id: worker_b.clone(),
@@ -134,8 +134,8 @@ fn leave_requeues_member_owned_lease_and_next_claim_advances_epoch() -> Result<(
 #[test]
 fn stale_reap_requeues_member_owned_lease_for_surviving_member() -> Result<(), Box<dyn Error>> {
     let mut machine = BrokerStateMachine::default();
-    let worker_a = MemberId::new("worker-a")?;
-    let worker_b = MemberId::new("worker-b")?;
+    let worker_a = ConsumerId::new("worker-a")?;
+    let worker_b = ConsumerId::new("worker-b")?;
     let (group_id, _) = setup_group(&mut machine, &worker_a)?;
     let joined = machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
         group_id: group_id.clone(),

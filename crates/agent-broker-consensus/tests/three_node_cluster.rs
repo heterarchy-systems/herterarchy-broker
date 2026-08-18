@@ -429,9 +429,9 @@ fn three_node_readiness_requires_current_leader_quorum_authority() -> Result<(),
         bootstrap_config: _,
         node_two_config: _,
         node_three_config: _,
-        node_one,
-        node_two,
-        node_three,
+        mut node_one,
+        mut node_two,
+        mut node_three,
     } = open_three_node_cluster(directory.path())?;
 
     let leader_observer = node_one.observer();
@@ -467,6 +467,19 @@ fn three_node_readiness_requires_current_leader_quorum_authority() -> Result<(),
         );
     }
 
+    let leader_directory = node_one.group_directory()?;
+    assert_eq!(leader_directory.term(), node_one.term());
+    let follower_two_read = node_two.group_directory();
+    let Err(follower_two_error) = follower_two_read else {
+        return Err("follower must not return an authoritative Group directory".into());
+    };
+    assert_eq!(follower_two_error.code(), BrokerErrorCode::TransportError);
+    let follower_three_read = node_three.group_directory();
+    let Err(follower_three_error) = follower_three_read else {
+        return Err("follower must not return an authoritative Group directory".into());
+    };
+    assert_eq!(follower_three_error.code(), BrokerErrorCode::TransportError);
+
     node_three.shutdown()?;
     node_two.shutdown()?;
     let quorum_lost = leader_observer.readiness();
@@ -475,6 +488,11 @@ fn three_node_readiness_requires_current_leader_quorum_authority() -> Result<(),
         ClusterRaftReadinessStatus::QuorumUnavailable
     );
     assert!(!quorum_lost.is_write_ready());
+    let quorum_lost_read = node_one.group_directory();
+    let Err(quorum_lost_error) = quorum_lost_read else {
+        return Err("quorum-lost leader must not return an authoritative Group directory".into());
+    };
+    assert_eq!(quorum_lost_error.code(), BrokerErrorCode::TransportError);
 
     node_one.shutdown()?;
     assert_eq!(

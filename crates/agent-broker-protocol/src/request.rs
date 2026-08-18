@@ -2,8 +2,8 @@ use std::error::Error;
 use std::fmt;
 
 use agent_broker_domain::{
-    Capabilities, CapabilitiesError, Capability, ConsumerGroupId, Generation, LeaseDurationMs,
-    LeaseEpoch, LeaseId, MemberId, NamespaceId, TaskId, TaskObjective, TaskResult, Term,
+    Capabilities, CapabilitiesError, Capability, ConsumerGroupId, ConsumerId, Generation,
+    LeaseDurationMs, LeaseEpoch, LeaseId, NamespaceId, TaskId, TaskObjective, TaskResult, Term,
 };
 
 /// Stable protocol generation shared with the Python reference Broker.
@@ -218,7 +218,7 @@ pub struct EnsureConsumerGroupRequest {
 pub struct JoinConsumerGroupRequest {
     pub request_id: RequestId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub capabilities: DeclaredCapabilities,
 }
 
@@ -226,7 +226,7 @@ pub struct JoinConsumerGroupRequest {
 pub struct HeartbeatRequest {
     pub request_id: RequestId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_generation: Generation,
 }
 
@@ -234,7 +234,7 @@ pub struct HeartbeatRequest {
 pub struct LeaveConsumerGroupRequest {
     pub request_id: RequestId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_generation: Generation,
 }
 
@@ -242,7 +242,7 @@ pub struct LeaveConsumerGroupRequest {
 pub struct ClaimTaskRequest {
     pub request_id: RequestId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub lease_id: LeaseId,
@@ -254,7 +254,7 @@ pub struct RenewTaskLeaseRequest {
     pub request_id: RequestId,
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,
@@ -267,7 +267,7 @@ pub struct CompleteTaskRequest {
     pub request_id: RequestId,
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,

@@ -2,7 +2,7 @@ use std::error::Error;
 
 use agent_broker_application::{BrokerErrorCode, BrokerErrorDisposition};
 use agent_broker_domain::{
-    ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId, Revision, TaskId,
     TaskObjective, TaskStatus, Term, TimestampMs,
 };
 use agent_broker_protocol::{
@@ -94,7 +94,7 @@ fn membership_reference_responses() -> Result<Vec<BrokerResponse>, Box<dyn Error
                 term: term()?,
                 revision: Revision::new(7),
                 group_id: ConsumerGroupId::new("engineering")?,
-                member_id: MemberId::new("worker-a")?,
+                member_id: ConsumerId::new("worker-a")?,
                 generation: Generation::new(5),
                 member_revision: Revision::new(8),
             },

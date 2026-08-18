@@ -2,7 +2,7 @@ use agent_broker_application::{
     BrokerError, BrokerErrorCode, BrokerErrorDisposition, SessionOwnerEpoch,
 };
 use agent_broker_domain::{
-    ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId, Revision, TaskId,
     TaskObjective, TaskStatus, Term, TimestampMs,
 };
 
@@ -41,7 +41,7 @@ pub enum SuccessPayload {
         term: Term,
         revision: Revision,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         generation: Generation,
         member_revision: Revision,
     },

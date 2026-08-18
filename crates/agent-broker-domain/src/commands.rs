@@ -1,6 +1,6 @@
 use crate::{
-    Capabilities, ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, TaskId,
-    TaskObjective, TaskResult, Term, TimestampMs,
+    Capabilities, ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId,
+    TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 
 /// Idempotently ensure one project/work namespace exists.
@@ -44,7 +44,7 @@ pub struct JoinConsumerGroupCommand {
     /// Consumer Group to join.
     pub group_id: ConsumerGroupId,
     /// Stable member identity.
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     /// Normalized provider-neutral capabilities.
     pub capabilities: Capabilities,
     /// Explicit join/refresh timestamp.
@@ -58,8 +58,8 @@ pub struct JoinConsumerGroupCommand {
 pub struct HeartbeatCommand {
     /// Consumer Group identity.
     pub group_id: ConsumerGroupId,
-    /// Member identity.
-    pub member_id: MemberId,
+    /// Consumer identity.
+    pub member_id: ConsumerId,
     /// Generation observed by the member.
     pub expected_generation: Generation,
     /// Explicit heartbeat timestamp.
@@ -71,8 +71,8 @@ pub struct HeartbeatCommand {
 pub struct LeaveConsumerGroupCommand {
     /// Consumer Group identity.
     pub group_id: ConsumerGroupId,
-    /// Member identity.
-    pub member_id: MemberId,
+    /// Consumer identity.
+    pub member_id: ConsumerId,
     /// Generation observed by the member.
     pub expected_generation: Generation,
 }
@@ -90,7 +90,7 @@ pub struct ReapStaleMembersCommand {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ClaimTaskCommand {
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub lease_id: LeaseId,
@@ -103,7 +103,7 @@ pub struct ClaimTaskCommand {
 pub struct RenewTaskLeaseCommand {
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,
@@ -117,7 +117,7 @@ pub struct RenewTaskLeaseCommand {
 pub struct CompleteTaskCommand {
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,

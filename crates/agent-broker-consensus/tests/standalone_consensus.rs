@@ -2,11 +2,14 @@ use std::error::Error;
 
 use agent_broker_application::{BrokerErrorCode, ConsensusAdapter};
 use agent_broker_consensus::StandaloneConsensusAdapter;
-use agent_broker_domain::commands::{BrokerCommand, EnsureNamespaceCommand, PublishTaskCommand};
+use agent_broker_domain::commands::{
+    BrokerCommand, EnsureConsumerGroupCommand, EnsureNamespaceCommand, JoinConsumerGroupCommand,
+    PublishTaskCommand,
+};
 use agent_broker_domain::results::StateChangeSet;
 use agent_broker_domain::{
-    BrokerCheckpoint, BrokerState, BrokerStateMachine, NamespaceId, Revision, TaskId,
-    TaskObjective, TimestampMs,
+    BrokerCheckpoint, BrokerState, BrokerStateMachine, Capabilities, ConsumerGroupId, ConsumerId,
+    NamespaceId, Revision, TaskId, TaskObjective, TimestampMs,
 };
 use agent_broker_storage::{
     BrokerStateRepository, JournalCompactionPolicy, JournaledBrokerStateRepository, RepositoryError,
@@ -162,5 +165,48 @@ fn fsynced_standalone_mutations_survive_adapter_restart() -> Result<(), Box<dyn 
             .task(&TaskId::new("task-1")?)
             .is_some()
     );
+    Ok(())
+}
+
+#[test]
+fn standalone_group_directory_is_side_effect_free_and_current() -> Result<(), Box<dyn Error>> {
+    let repository = FakeRepository {
+        checkpoint: BrokerStateMachine::default().state().checkpoint(),
+        fail_load: false,
+        fail_commit: false,
+    };
+    let mut adapter = StandaloneConsensusAdapter::new(repository)?;
+    let namespace_id = NamespaceId::new("project-a")?;
+    let group_id = ConsumerGroupId::new("backend-company")?;
+
+    adapter.propose(BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {
+        namespace_id: namespace_id.clone(),
+        max_namespaces: 64,
+    }))?;
+    adapter.propose(BrokerCommand::EnsureConsumerGroup(
+        EnsureConsumerGroupCommand {
+            namespace_id: namespace_id.clone(),
+            group_id: group_id.clone(),
+            max_namespace_groups: 64,
+        },
+    ))?;
+    adapter.propose(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
+        group_id: group_id.clone(),
+        member_id: ConsumerId::new("consumer-a")?,
+        capabilities: Capabilities::new(["code", "rust"])?,
+        now_ms: TimestampMs::new(1_000),
+        max_group_members: 64,
+    }))?;
+
+    let before_revision = adapter.revision();
+    let directory = adapter.group_directory()?;
+    assert_eq!(adapter.revision(), before_revision);
+    assert_eq!(directory.revision(), before_revision);
+    let Some(group) = directory.group(&group_id) else {
+        return Err("group directory must contain the committed Company".into());
+    };
+    assert_eq!(group.namespace_id(), &namespace_id);
+    assert_eq!(group.generation().get(), 1);
+    assert_eq!(group.consumer_count(), 1);
     Ok(())
 }

@@ -12,7 +12,7 @@ use agent_broker_domain::results::{
     TaskCompletedResult, TaskLeaseRenewedResult, TaskPublishedResult, TermAdvancedResult,
 };
 use agent_broker_domain::{
-    Capabilities, ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId,
+    Capabilities, ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId,
     Revision, TaskId, TaskObjective, TaskStatus, Term, TimestampMs,
 };
 
@@ -84,7 +84,7 @@ fn sample_commands() -> Result<Vec<BrokerCommand>, Box<dyn std::error::Error>> {
     let namespace_id = NamespaceId::new("project-a")?;
     let task_id = TaskId::new("task-1")?;
     let group_id = ConsumerGroupId::new("workers")?;
-    let member_id = MemberId::new("worker-1")?;
+    let member_id = ConsumerId::new("worker-1")?;
     let lease_id = LeaseId::new("lease-1")?;
 
     Ok(vec![
@@ -195,7 +195,7 @@ fn sample_results() -> Result<Vec<BrokerMutationResult>, Box<dyn std::error::Err
         BrokerMutationResult::Heartbeat(HeartbeatResult {
             metadata,
             group_id: ConsumerGroupId::new("workers")?,
-            member_id: MemberId::new("worker-1")?,
+            member_id: ConsumerId::new("worker-1")?,
             generation: Generation::new(1),
             member_revision: Revision::new(4),
         }),

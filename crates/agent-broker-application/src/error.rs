@@ -173,7 +173,7 @@ fn task_transition_error_code(error: &TaskTransitionError) -> BrokerErrorCode {
 #[cfg(test)]
 mod tests {
     use agent_broker_domain::{
-        ConsumerGroupError, ConsumerGroupId, Generation, LeaseId, MemberId, StateMachineError,
+        ConsumerGroupError, ConsumerGroupId, ConsumerId, Generation, LeaseId, StateMachineError,
         TaskId, TaskTransitionError,
     };
 
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(stale_group.code(), BrokerErrorCode::StaleFence);
 
         let missing_member = BrokerError::from(StateMachineError::ConsumerGroupTransition(
-            ConsumerGroupError::MemberNotFound(MemberId::new("worker-a")?),
+            ConsumerGroupError::MemberNotFound(ConsumerId::new("worker-a")?),
         ));
         assert_eq!(missing_member.code(), BrokerErrorCode::NotFound);
 

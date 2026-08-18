@@ -10,9 +10,9 @@ use agent_broker_domain::results::{
     TaskLeaseRenewedResult, TaskPublishedResult, TermAdvancedResult,
 };
 use agent_broker_domain::{
-    BrokerCapacityPolicy, Capabilities, ConsumerGroupId, Generation, LeaseDurationMs, LeaseEpoch,
-    LeaseId, MemberId, NamespaceId, PruneTaskLimit, ReapMemberLimit, Revision, TaskId,
-    TaskObjective, TaskResult, Term, TimestampMs,
+    BrokerCapacityPolicy, Capabilities, ConsumerGroupDirectory, ConsumerGroupId, ConsumerId,
+    Generation, LeaseDurationMs, LeaseEpoch, LeaseId, NamespaceId, PruneTaskLimit, ReapMemberLimit,
+    Revision, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 
 use crate::{
@@ -35,7 +35,7 @@ pub struct BrokerHealth {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ClaimTaskInput {
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub lease_id: LeaseId,
@@ -48,7 +48,7 @@ pub struct ClaimTaskInput {
 pub struct RenewTaskLeaseInput {
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,
@@ -62,7 +62,7 @@ pub struct RenewTaskLeaseInput {
 pub struct CompleteTaskInput {
     pub task_id: TaskId,
     pub group_id: ConsumerGroupId,
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub expected_term: Term,
     pub expected_generation: Generation,
     pub expected_lease_epoch: LeaseEpoch,
@@ -98,6 +98,15 @@ where
             revision: self.consensus.revision(),
             protocol_version: 1,
         }
+    }
+
+    /// Return a side-effect-free Consumer Group directory from the consensus authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when the current topology cannot establish read authority.
+    pub fn group_directory(&mut self) -> Result<ConsumerGroupDirectory, BrokerError> {
+        self.consensus.group_directory()
     }
 
     /// Return whether this process currently owns authority to initiate bounded maintenance.
@@ -223,7 +232,7 @@ where
         &mut self,
         identity: CommandIdentity,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         capabilities: Capabilities,
         now_ms: TimestampMs,
     ) -> Result<ConsumerGroupResult, BrokerError> {
@@ -248,7 +257,7 @@ where
         &mut self,
         identity: CommandIdentity,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
         now_ms: TimestampMs,
     ) -> Result<HeartbeatResult, BrokerError> {
@@ -272,7 +281,7 @@ where
         &mut self,
         identity: CommandIdentity,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
     ) -> Result<ConsumerGroupResult, BrokerError> {
         expect_consumer_group(self.propose_identified(
@@ -435,7 +444,7 @@ where
     pub fn join_consumer_group(
         &mut self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         capabilities: Capabilities,
         now_ms: TimestampMs,
     ) -> Result<ConsumerGroupResult, BrokerError> {
@@ -458,7 +467,7 @@ where
     pub fn heartbeat(
         &mut self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
         now_ms: TimestampMs,
     ) -> Result<HeartbeatResult, BrokerError> {
@@ -481,7 +490,7 @@ where
     pub fn leave_consumer_group(
         &mut self,
         group_id: ConsumerGroupId,
-        member_id: MemberId,
+        member_id: ConsumerId,
         expected_generation: Generation,
     ) -> Result<ConsumerGroupResult, BrokerError> {
         expect_consumer_group(self.consensus.propose(BrokerCommand::LeaveConsumerGroup(

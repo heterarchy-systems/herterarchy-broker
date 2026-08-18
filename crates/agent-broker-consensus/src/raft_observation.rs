@@ -1,6 +1,7 @@
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use agent_broker_domain::{BrokerState, Revision, Term};
+use agent_broker_domain::{BrokerState, ConsumerGroupDirectory, Revision, Term};
 
 /// Lock-free read-only projection of the committed Broker state owned by `OpenRaft`.
 ///
@@ -11,6 +12,7 @@ use agent_broker_domain::{BrokerState, Revision, Term};
 pub(crate) struct RaftBrokerObservation {
     term: AtomicU64,
     revision: AtomicU64,
+    group_directory: RwLock<ConsumerGroupDirectory>,
     has_applied_index: AtomicBool,
     applied_index: AtomicU64,
 }
@@ -20,14 +22,21 @@ impl RaftBrokerObservation {
         Self {
             term: AtomicU64::new(state.term().get()),
             revision: AtomicU64::new(state.revision().get()),
+            group_directory: RwLock::new(state.group_directory()),
             has_applied_index: AtomicBool::new(applied_index.is_some()),
             applied_index: AtomicU64::new(applied_index.unwrap_or(0)),
         }
     }
 
     pub(crate) fn update(&self, state: &BrokerState, applied_index: Option<u64>) {
-        // Store data first and the applied pointer last. Readers which observe the new applied
-        // pointer are therefore guaranteed to observe at least the corresponding term/revision.
+        // Store the full read-only directory and scalar data first and the applied pointer last.
+        // Readers which observe the new applied pointer are therefore guaranteed to observe at
+        // least the corresponding Group directory, term, and revision.
+        let directory = state.group_directory();
+        match self.group_directory.write() {
+            Ok(mut current) => *current = directory,
+            Err(poisoned) => *poisoned.into_inner() = directory,
+        }
         self.term.store(state.term().get(), Ordering::Release);
         self.revision
             .store(state.revision().get(), Ordering::Release);
@@ -44,6 +53,13 @@ impl RaftBrokerObservation {
 
     pub(crate) fn revision(&self) -> Revision {
         Revision::new(self.revision.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn group_directory(&self) -> ConsumerGroupDirectory {
+        match self.group_directory.read() {
+            Ok(directory) => directory.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     pub(crate) fn applied_index(&self) -> Option<u64> {

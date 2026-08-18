@@ -8,7 +8,7 @@ use agent_broker_domain::results::{
     TaskCompletedResult, TaskLeaseRenewedResult, TaskPublishedResult, TermAdvancedResult,
 };
 use agent_broker_domain::{
-    ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId, Revision, TaskId,
     TaskObjective, TaskStatus, Term, TimestampMs,
 };
 use serde::{Deserialize, Serialize};
@@ -535,7 +535,7 @@ fn convert_coordination_result(
         } => Ok(BrokerMutationResult::Heartbeat(HeartbeatResult {
             metadata: metadata.try_into()?,
             group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-            member_id: MemberId::new(member_id).map_err(validation_error)?,
+            member_id: ConsumerId::new(member_id).map_err(validation_error)?,
             generation: Generation::new(generation),
             member_revision: Revision::new(member_revision),
         })),

@@ -7,8 +7,8 @@ use agent_broker_application::{
 use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerCapacityPolicy, BrokerStateMachine, Capabilities, ConsumerGroupId, Generation,
-    LeaseDurationMs, LeaseId, MemberId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult,
+    BrokerCapacityPolicy, BrokerStateMachine, Capabilities, ConsumerGroupId, ConsumerId,
+    Generation, LeaseDurationMs, LeaseId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult,
     TaskStatus, Term, TimestampMs,
 };
 
@@ -45,7 +45,7 @@ fn application_service_runs_typed_task_lifecycle_through_consensus_boundary()
 
     let namespace_id = NamespaceId::new("project-a")?;
     let group_id = ConsumerGroupId::new("engineering")?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     let task_id = TaskId::new("task-1")?;
     service.ensure_namespace(namespace_id.clone())?;
     service.ensure_consumer_group(namespace_id.clone(), group_id.clone())?;
@@ -97,7 +97,7 @@ fn application_service_preserves_stable_stale_fence_code() -> Result<(), Box<dyn
         BrokerApplicationService::new(MemoryConsensus::default(), BrokerCapacityPolicy::default());
     let namespace_id = NamespaceId::new("project-a")?;
     let group_id = ConsumerGroupId::new("engineering")?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     service.ensure_namespace(namespace_id.clone())?;
     service.ensure_consumer_group(namespace_id, group_id.clone())?;
     let joined = service.join_consumer_group(

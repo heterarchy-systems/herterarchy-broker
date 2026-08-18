@@ -108,12 +108,12 @@ macro_rules! define_identifier {
 define_identifier!(NamespaceId, "namespace_id");
 define_identifier!(TaskId, "task_id");
 define_identifier!(ConsumerGroupId, "group_id");
-define_identifier!(MemberId, "member_id");
+define_identifier!(ConsumerId, "member_id");
 define_identifier!(LeaseId, "lease_id");
 
 #[cfg(test)]
 mod tests {
-    use super::{ConsumerGroupId, NamespaceId, TaskId};
+    use super::{ConsumerGroupId, ConsumerId, NamespaceId, TaskId};
 
     #[test]
     fn identifiers_preserve_python_reference_contract() {
@@ -143,5 +143,16 @@ mod tests {
 
         let invalid = TaskId::new(format!("t{}", "a".repeat(128)));
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn member_id_remains_a_wire_compatible_name_for_logical_consumer_identity() {
+        let consumer_id = ConsumerId::new("consumer-backend-a");
+        let member_id = ConsumerId::new("consumer-backend-a");
+
+        assert_eq!(
+            consumer_id.as_ref().map(ConsumerId::as_str),
+            member_id.as_ref().map(ConsumerId::as_str)
+        );
     }
 }

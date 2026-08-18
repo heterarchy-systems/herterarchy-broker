@@ -18,7 +18,7 @@ use agent_broker_domain::commands::{
 };
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerStateMachine, Capabilities, ConsumerGroupId, LeaseId, MemberId, NamespaceId, TaskId,
+    BrokerStateMachine, Capabilities, ConsumerGroupId, ConsumerId, LeaseId, NamespaceId, TaskId,
     TaskObjective, TaskResult, Term, TimestampMs,
 };
 use agent_broker_storage::{
@@ -307,7 +307,7 @@ fn measure_hot_paths() -> Result<HotPathMetrics, Box<dyn Error>> {
             max_namespace_groups: 64,
         },
     ))?;
-    let member_id = MemberId::new("worker-1")?;
+    let member_id = ConsumerId::new("worker-1")?;
     let joined = machine.apply(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
         group_id: group_id.clone(),
         member_id: member_id.clone(),

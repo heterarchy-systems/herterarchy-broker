@@ -1,7 +1,7 @@
 use agent_broker_application::{BrokerError, BrokerErrorCode, ConsensusAdapter};
 use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
-use agent_broker_domain::{BrokerStateMachine, Revision, Term};
+use agent_broker_domain::{BrokerStateMachine, ConsumerGroupDirectory, Revision, Term};
 use agent_broker_storage::{BrokerStateRepository, RepositoryError};
 
 const FAIL_STOPPED_MESSAGE: &str = "Standalone Broker is fail-stopped after a durability failure.";
@@ -58,6 +58,16 @@ impl<R: BrokerStateRepository> ConsensusAdapter for StandaloneConsensusAdapter<R
 
     fn revision(&self) -> Revision {
         self.machine.state().revision()
+    }
+
+    fn group_directory(&mut self) -> Result<ConsumerGroupDirectory, BrokerError> {
+        if self.poisoned {
+            return Err(BrokerError::new(
+                BrokerErrorCode::PersistenceError,
+                FAIL_STOPPED_MESSAGE,
+            ));
+        }
+        Ok(self.machine.state().group_directory())
     }
 
     fn propose(&mut self, command: BrokerCommand) -> Result<BrokerMutationResult, BrokerError> {

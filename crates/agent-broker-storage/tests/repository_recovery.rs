@@ -9,7 +9,7 @@ use agent_broker_domain::commands::{
 };
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerStateMachine, Capabilities, ConsumerGroupId, LeaseId, MemberId, NamespaceId, TaskId,
+    BrokerStateMachine, Capabilities, ConsumerGroupId, ConsumerId, LeaseId, NamespaceId, TaskId,
     TaskObjective, TaskState, Term, TimestampMs,
 };
 use agent_broker_storage::{
@@ -37,7 +37,7 @@ fn high_threshold_policy() -> Result<JournalCompactionPolicy, Box<dyn Error>> {
 fn bootstrap_group(
     machine: &mut BrokerStateMachine,
     repository: &mut JournaledBrokerStateRepository,
-) -> Result<(ConsumerGroupId, MemberId, agent_broker_domain::Generation), Box<dyn Error>> {
+) -> Result<(ConsumerGroupId, ConsumerId, agent_broker_domain::Generation), Box<dyn Error>> {
     let namespace_id = NamespaceId::new("project-a")?;
     apply_and_commit(
         machine,
@@ -57,7 +57,7 @@ fn bootstrap_group(
             max_namespace_groups: 64,
         }),
     )?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     let joined = apply_and_commit(
         machine,
         repository,

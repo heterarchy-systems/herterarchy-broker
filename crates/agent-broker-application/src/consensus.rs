@@ -1,6 +1,6 @@
 use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
-use agent_broker_domain::{Revision, Term};
+use agent_broker_domain::{ConsumerGroupDirectory, Revision, Term};
 
 use crate::{
     BrokerError, BrokerErrorCode, CommandIdentity, CommandSessionId, SessionOwnerEpoch,
@@ -17,6 +17,21 @@ pub trait ConsensusAdapter {
 
     /// Return the current committed Broker revision.
     fn revision(&self) -> Revision;
+
+    /// Return one side-effect-free directory of current Consumer Groups.
+    ///
+    /// Replicated implementations must establish read authority before returning this data and
+    /// must never expose a follower-local stale projection as authoritative state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when this adapter cannot establish an authoritative read.
+    fn group_directory(&mut self) -> Result<ConsumerGroupDirectory, BrokerError> {
+        Err(BrokerError::new(
+            BrokerErrorCode::InternalError,
+            "Consumer Group directory reads are unavailable for this consensus adapter",
+        ))
+    }
 
     /// Return whether this adapter currently owns authority to initiate maintenance mutations.
     ///

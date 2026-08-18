@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    Capabilities, ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId,
+    Capabilities, ConsumerGroupId, ConsumerId, Generation, LeaseEpoch, LeaseId, NamespaceId,
     Revision, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 
@@ -39,7 +39,7 @@ pub struct ConsumerGroupCheckpoint {
 /// Consumer Group member record carried by a logical Broker checkpoint.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MemberCheckpoint {
-    pub member_id: MemberId,
+    pub member_id: ConsumerId,
     pub capabilities: Capabilities,
     pub joined_at_ms: TimestampMs,
     pub last_heartbeat_at_ms: TimestampMs,
@@ -65,7 +65,7 @@ pub enum TaskCheckpointState {
     },
     Leased {
         lease_id: LeaseId,
-        owner_member_id: MemberId,
+        owner_member_id: ConsumerId,
         group_id: ConsumerGroupId,
         generation: Generation,
         lease_epoch: LeaseEpoch,
@@ -73,7 +73,7 @@ pub enum TaskCheckpointState {
     },
     Completed {
         lease_id: LeaseId,
-        owner_member_id: MemberId,
+        owner_member_id: ConsumerId,
         group_id: ConsumerGroupId,
         generation: Generation,
         lease_epoch: LeaseEpoch,
@@ -91,7 +91,7 @@ pub enum CheckpointError {
     DuplicateNamespace(NamespaceId),
     DuplicateTask(TaskId),
     DuplicateConsumerGroup(ConsumerGroupId),
-    DuplicateMember(MemberId),
+    DuplicateMember(ConsumerId),
     DuplicateActiveLease(LeaseId),
     UnknownNamespace {
         entity: &'static str,

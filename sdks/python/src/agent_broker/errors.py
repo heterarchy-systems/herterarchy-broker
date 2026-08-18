@@ -83,6 +83,27 @@ class ClusterRoutingError(AgentBrokerError):
     """
 
 
+class OperationsErrorCode(str, Enum):
+    """Stable read-only operations error tokens returned by the Broker."""
+
+    READ_AUTHORITY_UNAVAILABLE = "read_authority_unavailable"
+    BROKER_FAIL_STOPPED = "broker_fail_stopped"
+    BROKER_READ_FAILED = "broker_read_failed"
+    STATE_OWNER_SATURATED = "state_owner_saturated"
+    STATE_OWNER_UNAVAILABLE = "state_owner_unavailable"
+    NOT_FOUND = "not_found"
+
+
+class OperationsError(AgentBrokerError):
+    """Typed Broker operations failure."""
+
+    def __init__(self, code: OperationsErrorCode) -> None:
+        """Initialize one typed operations failure."""
+
+        super().__init__(f"broker operations request failed: {code.value}")
+        self.code = code
+
+
 class NoWriteReadyLeader(ClusterRoutingError):
     """Raised when no verified write-ready leader can be identified.
 

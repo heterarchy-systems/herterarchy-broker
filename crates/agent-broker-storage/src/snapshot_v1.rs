@@ -1,8 +1,8 @@
 use agent_broker_domain::{
     BrokerCheckpoint, BrokerStateMachine, Capabilities, ConsumerGroupCheckpoint, ConsumerGroupId,
-    Generation, LeaseEpoch, LeaseId, MemberCheckpoint, MemberId, NamespaceCheckpoint, NamespaceId,
-    Revision, TaskCheckpoint, TaskCheckpointState, TaskId, TaskObjective, TaskResult, Term,
-    TimestampMs,
+    ConsumerId, Generation, LeaseEpoch, LeaseId, MemberCheckpoint, NamespaceCheckpoint,
+    NamespaceId, Revision, TaskCheckpoint, TaskCheckpointState, TaskId, TaskObjective, TaskResult,
+    Term, TimestampMs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -202,7 +202,7 @@ fn member_to_wire(member: &MemberCheckpoint) -> MemberWire {
 
 fn member_from_wire(wire: MemberWire) -> Result<MemberCheckpoint, StorageError> {
     Ok(MemberCheckpoint {
-        member_id: MemberId::new(wire.member_id).map_err(invalid_value("member_id"))?,
+        member_id: ConsumerId::new(wire.member_id).map_err(invalid_value("member_id"))?,
         capabilities: Capabilities::new(wire.capabilities)
             .map_err(invalid_value("member.capabilities"))?,
         joined_at_ms: TimestampMs::new(wire.joined_at_ms),
@@ -298,7 +298,7 @@ fn task_state_from_wire(wire: &TaskWire) -> Result<TaskCheckpointState, StorageE
                 owner_member_id: required_id(
                     wire.lease_owner_member_id.as_deref(),
                     "task.lease_owner_member_id",
-                    MemberId::new,
+                    ConsumerId::new,
                 )?,
                 group_id: required_id(
                     wire.lease_group_id.as_deref(),
@@ -327,7 +327,7 @@ fn task_state_from_wire(wire: &TaskWire) -> Result<TaskCheckpointState, StorageE
                 owner_member_id: required_id(
                     wire.lease_owner_member_id.as_deref(),
                     "task.lease_owner_member_id",
-                    MemberId::new,
+                    ConsumerId::new,
                 )?,
                 group_id: required_id(
                     wire.lease_group_id.as_deref(),

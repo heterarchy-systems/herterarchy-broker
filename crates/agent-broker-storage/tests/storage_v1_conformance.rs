@@ -6,8 +6,8 @@ use agent_broker_domain::commands::{
 };
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerCheckpoint, BrokerStateMachine, Capabilities, ConsumerGroupId, Generation, LeaseId,
-    MemberId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
+    BrokerCheckpoint, BrokerStateMachine, Capabilities, ConsumerGroupId, ConsumerId, Generation,
+    LeaseId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 use agent_broker_storage::{
     StorageError, apply_journal_mutation, decode_journal_mutation, decode_snapshot,
@@ -26,7 +26,7 @@ struct RustArtifacts {
 struct ReferenceIds {
     namespace_id: NamespaceId,
     group_id: ConsumerGroupId,
-    member_id: MemberId,
+    member_id: ConsumerId,
     generation: Generation,
 }
 
@@ -58,7 +58,7 @@ fn setup_reference(
 ) -> Result<ReferenceIds, Box<dyn Error>> {
     let namespace_id = NamespaceId::new("project-a")?;
     let group_id = ConsumerGroupId::new("engineering")?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     apply_and_record(
         machine,
         BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {

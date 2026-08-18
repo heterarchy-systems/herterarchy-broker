@@ -4,7 +4,7 @@ use std::fmt;
 
 use agent_broker_application::{BrokerError, BrokerErrorCode};
 use agent_broker_domain::{
-    ConsumerGroupId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId, MemberId, NamespaceId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId, NamespaceId,
     Revision, TaskId, TaskObjective, TaskResult, TaskStatus, Term, TimestampMs,
 };
 use serde::Deserialize;
@@ -497,7 +497,7 @@ fn decode_heartbeat_result(value: Value) -> Result<SuccessPayload, ProtocolCodec
         revision: Revision::new(wire.revision),
         group_id: ConsumerGroupId::new(wire.group_id)
             .map_err(|error| invalid_field("group_id", &error))?,
-        member_id: MemberId::new(wire.member_id)
+        member_id: ConsumerId::new(wire.member_id)
             .map_err(|error| invalid_field("member_id", &error))?,
         generation: Generation::new(wire.generation),
         member_revision: positive_revision(wire.member_revision, "member_revision")?,
@@ -740,7 +740,7 @@ fn decode_join_group(
         request_id,
         group_id: ConsumerGroupId::new(payload.group_id)
             .map_err(|error| invalid_field("group_id", &error))?,
-        member_id: MemberId::new(payload.member_id)
+        member_id: ConsumerId::new(payload.member_id)
             .map_err(|error| invalid_field("member_id", &error))?,
         capabilities: DeclaredCapabilities::new(payload.capabilities)
             .map_err(|error| invalid_field("capabilities", &error))?,
@@ -756,7 +756,7 @@ fn decode_heartbeat(
         request_id,
         group_id: ConsumerGroupId::new(payload.group_id)
             .map_err(|error| invalid_field("group_id", &error))?,
-        member_id: MemberId::new(payload.member_id)
+        member_id: ConsumerId::new(payload.member_id)
             .map_err(|error| invalid_field("member_id", &error))?,
         expected_generation: Generation::new(payload.expected_generation),
     }))
@@ -772,7 +772,7 @@ fn decode_leave_group(
             request_id,
             group_id: ConsumerGroupId::new(payload.group_id)
                 .map_err(|error| invalid_field("group_id", &error))?,
-            member_id: MemberId::new(payload.member_id)
+            member_id: ConsumerId::new(payload.member_id)
                 .map_err(|error| invalid_field("member_id", &error))?,
             expected_generation: Generation::new(payload.expected_generation),
         },
@@ -788,7 +788,7 @@ fn decode_claim(
         request_id,
         group_id: ConsumerGroupId::new(payload.group_id)
             .map_err(|error| invalid_field("group_id", &error))?,
-        member_id: MemberId::new(payload.member_id)
+        member_id: ConsumerId::new(payload.member_id)
             .map_err(|error| invalid_field("member_id", &error))?,
         expected_term: Term::new(payload.expected_term)
             .map_err(|error| invalid_field("expected_term", &error))?,
@@ -810,7 +810,7 @@ fn decode_renew(
         task_id: TaskId::new(payload.task_id).map_err(|error| invalid_field("task_id", &error))?,
         group_id: ConsumerGroupId::new(payload.group_id)
             .map_err(|error| invalid_field("group_id", &error))?,
-        member_id: MemberId::new(payload.member_id)
+        member_id: ConsumerId::new(payload.member_id)
             .map_err(|error| invalid_field("member_id", &error))?,
         expected_term: Term::new(payload.expected_term)
             .map_err(|error| invalid_field("expected_term", &error))?,
@@ -833,7 +833,7 @@ fn decode_complete(
         task_id: TaskId::new(payload.task_id).map_err(|error| invalid_field("task_id", &error))?,
         group_id: ConsumerGroupId::new(payload.group_id)
             .map_err(|error| invalid_field("group_id", &error))?,
-        member_id: MemberId::new(payload.member_id)
+        member_id: ConsumerId::new(payload.member_id)
             .map_err(|error| invalid_field("member_id", &error))?,
         expected_term: Term::new(payload.expected_term)
             .map_err(|error| invalid_field("expected_term", &error))?,
@@ -958,7 +958,7 @@ fn request_payload(request: &BrokerRequest) -> Value {
 
 fn membership_payload(
     group_id: &ConsumerGroupId,
-    member_id: &MemberId,
+    member_id: &ConsumerId,
     expected_generation: u64,
 ) -> Value {
     object([
@@ -1227,7 +1227,7 @@ fn heartbeat_success_payload(
     term: Term,
     revision: Revision,
     group_id: &ConsumerGroupId,
-    member_id: &MemberId,
+    member_id: &ConsumerId,
     generation: Generation,
     member_revision: Revision,
 ) -> Value {

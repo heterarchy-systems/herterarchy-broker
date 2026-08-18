@@ -1,5 +1,6 @@
 from .async_client import AsyncBrokerClient
 from .async_cluster import AsyncClusterBrokerClient, AsyncStaticClusterBrokerClient
+from .async_operations import AsyncBrokerOperationsClient
 from .async_standalone import AsyncStandaloneBrokerClient
 from .client import BrokerClient
 from .cluster import ClusterBrokerClient, StaticClusterBrokerClient
@@ -12,16 +13,22 @@ from .errors import (
     InvalidOperationsResponse,
     MultipleWriteReadyLeaders,
     NoWriteReadyLeader,
+    OperationsError,
+    OperationsErrorCode,
     ProtocolError,
     TransportError,
 )
 from .models import (
     BrokerClientConfig,
     CommandIdentity,
+    ConsumerGroupDescription,
+    ConsumerGroupPage,
     ConsumerGroupResult,
+    ConsumerGroupSummary,
     HealthResult,
     HeartbeatResult,
     NamespaceResult,
+    OperationsClientConfig,
     OwnerAcquisitionResult,
     RetryPolicy,
     StaticClusterConfig,
@@ -31,11 +38,13 @@ from .models import (
     TaskLeaseRenewedResult,
     TaskPublishedResult,
 )
+from .operations import BrokerOperationsClient
 from .standalone import StandaloneBrokerClient
 
 __all__ = [
     "AgentBrokerError",
     "AsyncBrokerClient",
+    "AsyncBrokerOperationsClient",
     "AsyncClusterBrokerClient",
     "AsyncStandaloneBrokerClient",
     "AsyncStaticClusterBrokerClient",
@@ -43,10 +52,14 @@ __all__ = [
     "BrokerClientConfig",
     "BrokerError",
     "BrokerErrorCode",
+    "BrokerOperationsClient",
     "ClusterBrokerClient",
     "ClusterRoutingError",
     "CommandIdentity",
+    "ConsumerGroupDescription",
+    "ConsumerGroupPage",
     "ConsumerGroupResult",
+    "ConsumerGroupSummary",
     "ErrorDisposition",
     "HealthResult",
     "HeartbeatResult",
@@ -54,6 +67,9 @@ __all__ = [
     "MultipleWriteReadyLeaders",
     "NamespaceResult",
     "NoWriteReadyLeader",
+    "OperationsClientConfig",
+    "OperationsError",
+    "OperationsErrorCode",
     "OwnerAcquisitionResult",
     "ProtocolError",
     "RetryPolicy",

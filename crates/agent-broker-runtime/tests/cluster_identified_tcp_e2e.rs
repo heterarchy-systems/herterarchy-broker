@@ -26,7 +26,7 @@ use agent_broker_consensus::{
 use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
-    BrokerCapacityPolicy, ConsumerGroupId, MemberId, NamespaceId, TaskId, TaskObjective, Term,
+    BrokerCapacityPolicy, ConsumerGroupId, ConsumerId, NamespaceId, TaskId, TaskObjective, Term,
     TimestampMs,
 };
 use agent_broker_protocol::{
@@ -511,7 +511,7 @@ fn cluster_maintenance_is_leader_gated_and_commits_through_raft() -> Result<(), 
     let mut client = cluster.client()?;
     let namespace_id = NamespaceId::new("maintenance-project")?;
     let group_id = ConsumerGroupId::new("maintenance-group")?;
-    let member_id = MemberId::new("maintenance-worker")?;
+    let member_id = ConsumerId::new("maintenance-worker")?;
     client.ensure_namespace(namespace_id.clone())?;
     client.ensure_consumer_group(namespace_id, group_id.clone())?;
     client.join_consumer_group(

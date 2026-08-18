@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use agent_broker_client::{BrokerClient, BrokerClientConfig, ClaimInput, CompleteInput};
 use agent_broker_domain::{
-    ConsumerGroupId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId, MemberId, NamespaceId,
+    ConsumerGroupId, ConsumerId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId, NamespaceId,
     Revision, TaskId, TaskObjective, TaskResult, TaskStatus, Term,
 };
 use agent_broker_protocol::DeclaredCapabilities;
@@ -34,6 +34,8 @@ fn start_broker(state_path: &Path) -> Result<RunningBroker, Box<dyn Error>> {
         .arg("--host")
         .arg("127.0.0.1")
         .arg("--port")
+        .arg("0")
+        .arg("--operations-port")
         .arg("0")
         .arg("--state-path")
         .arg(state_path)
@@ -95,7 +97,7 @@ fn acked_mutations_survive_hard_process_kill_and_restart() -> Result<(), Box<dyn
     first
         .client
         .ensure_consumer_group(namespace_id, group_id.clone())?;
-    let member_id = MemberId::new("worker-a")?;
+    let member_id = ConsumerId::new("worker-a")?;
     let joined = first.client.join_consumer_group(
         group_id.clone(),
         member_id.clone(),
