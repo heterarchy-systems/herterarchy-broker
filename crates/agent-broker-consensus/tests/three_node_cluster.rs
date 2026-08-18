@@ -36,6 +36,11 @@ const IDENTIFIED_TIMEOUT_TEST_DEADLINE: Duration = Duration::from_millis(100);
 const IDENTIFIED_TIMEOUT_TEST_ELECTION_MIN: Duration = Duration::from_secs(3);
 const IDENTIFIED_TIMEOUT_TEST_ELECTION_MAX: Duration = Duration::from_secs(4);
 const IDENTIFIED_TIMEOUT_TEST_HEARTBEAT: Duration = Duration::from_secs(1);
+const FAILOVER_NODE_TWO_ELECTION_MIN: Duration = Duration::from_secs(2);
+const FAILOVER_NODE_TWO_ELECTION_MAX: Duration = Duration::from_secs(3);
+const FAILOVER_NODE_THREE_ELECTION_MIN: Duration = Duration::from_secs(4);
+const FAILOVER_NODE_THREE_ELECTION_MAX: Duration = Duration::from_secs(5);
+const FAILOVER_TEST_HEARTBEAT: Duration = Duration::from_millis(100);
 const TEST_RAFT_META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("raft_meta_v1");
 
 fn validation_tls() -> Result<ClusterRaftTlsConfig, Box<dyn Error>> {
@@ -512,7 +517,7 @@ fn three_node_cluster_re_elects_after_leader_shutdown_and_rejoins() -> Result<()
         mut node_one,
         mut node_two,
         mut node_three,
-    } = open_three_node_cluster(directory.path())?;
+    } = open_three_node_cluster_for_failover(directory.path())?;
 
     node_one.propose(BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {
         namespace_id: NamespaceId::new("before-leader-shutdown")?,
@@ -636,7 +641,7 @@ fn three_node_session_owner_epoch_fences_stale_owner_after_leader_change()
         mut node_one,
         mut node_two,
         mut node_three,
-    } = open_three_node_cluster(directory.path())?;
+    } = open_three_node_cluster_for_failover(directory.path())?;
 
     let session_id = CommandSessionId::new("three-node-owner-session")?;
     let epoch_one = SessionOwnerEpoch::INITIAL;
@@ -1226,6 +1231,19 @@ fn open_three_node_cluster(root: &Path) -> Result<RunningCluster, Box<dyn Error>
     open_three_node_cluster_with_policy(root, None)
 }
 
+fn open_three_node_cluster_for_failover(root: &Path) -> Result<RunningCluster, Box<dyn Error>> {
+    let (reservations, addresses) = reserve_three_ports()?;
+    open_three_node_cluster_with_topology(
+        root,
+        None,
+        reservations,
+        addresses,
+        addresses,
+        None,
+        true,
+    )
+}
+
 fn open_three_node_cluster_with_snapshot_policy(
     root: &Path,
     snapshot_log_interval: u64,
@@ -1254,6 +1272,7 @@ fn open_three_node_cluster_with_policy(
         addresses,
         addresses,
         None,
+        false,
     )
 }
 
@@ -1276,6 +1295,7 @@ fn open_three_node_cluster_with_snapshot_proxy(
         addresses,
         [addresses[0], addresses[1], proxy.local_addr()],
         None,
+        false,
     )?;
     Ok((cluster, proxy))
 }
@@ -1298,6 +1318,7 @@ fn open_three_node_cluster_with_append_response_suppression_proxies(
             proxy_three.local_addr(),
         ],
         Some(IDENTIFIED_TIMEOUT_TEST_DEADLINE),
+        false,
     )?;
     Ok((cluster, [proxy_one, proxy_two, proxy_three]))
 }
@@ -1309,6 +1330,7 @@ fn open_three_node_cluster_with_topology(
     addresses: [SocketAddr; 3],
     advertised_addresses: [SocketAddr; 3],
     identified_write_timeout: Option<Duration>,
+    stagger_survivor_elections: bool,
 ) -> Result<RunningCluster, Box<dyn Error>> {
     let tls_directory = root.join("raft-tls");
     tls_fixture::write_cluster_tls_fixture(&tls_directory, &[1, 2, 3])?;
@@ -1378,6 +1400,10 @@ fn open_three_node_cluster_with_topology(
                 IDENTIFIED_TIMEOUT_TEST_HEARTBEAT,
             )?;
     }
+    if stagger_survivor_elections {
+        (node_two_config, node_three_config) =
+            with_staggered_survivor_election_timing(node_two_config, node_three_config)?;
+    }
     let mut reservations = reservations.into_iter();
     let node_one_port = reservations
         .next()
@@ -1407,6 +1433,23 @@ fn open_three_node_cluster_with_topology(
         node_two,
         node_three,
     })
+}
+
+fn with_staggered_survivor_election_timing(
+    node_two_config: ClusterRaftConfig,
+    node_three_config: ClusterRaftConfig,
+) -> Result<(ClusterRaftConfig, ClusterRaftConfig), Box<dyn Error>> {
+    let node_two_config = node_two_config.with_raft_timing(
+        FAILOVER_NODE_TWO_ELECTION_MIN,
+        FAILOVER_NODE_TWO_ELECTION_MAX,
+        FAILOVER_TEST_HEARTBEAT,
+    )?;
+    let node_three_config = node_three_config.with_raft_timing(
+        FAILOVER_NODE_THREE_ELECTION_MIN,
+        FAILOVER_NODE_THREE_ELECTION_MAX,
+        FAILOVER_TEST_HEARTBEAT,
+    )?;
+    Ok((node_two_config, node_three_config))
 }
 
 fn wait_for_snapshot_purge_past(
