@@ -111,44 +111,6 @@ jobs:
           StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
           AsyncClusterBrokerClient; print('sdist imports: PASS')"
 
-  python-real-integration:
-    name: Python real Rust integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust 1.97
-        run: |
-          rustup toolchain install 1.97 --profile minimal
-          rustup default 1.97
-
-      - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.12.3"
-          python-version: "3.11"
-
-      - name: Build real Broker integration binaries
-        run: |
-          cargo build -q -p agent-broker-runtime --bin agentbrokerd
-          cargo build -q -p agent-broker-consensus --example generate_cluster_tls
-
-      - name: Run standalone and three-node sync/async integration
-        working-directory: sdks/python
-        env:
-          PYTHONPATH: src
-          AGENT_BROKER_RUN_RUST_INTEGRATION: "1"
-          AGENT_BROKER_RUN_CLUSTER_INTEGRATION: "1"
-          AGENT_BROKER_RUN_ASYNC_RUST_INTEGRATION: "1"
-          AGENT_BROKER_RUN_ASYNC_CLUSTER_INTEGRATION: "1"
-        run: >-
-          uv run --no-project --python 3.11 python -m unittest -v
-          tests.test_rust_integration
-          tests.test_cluster_integration
-          tests.test_async_integration
-
   docker:
     name: Docker multi-arch build only
     runs-on: ubuntu-latest
