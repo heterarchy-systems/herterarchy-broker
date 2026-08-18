@@ -353,7 +353,7 @@ fn verify_python_client_sdk_boundary(root: &Path) -> HarnessResult<()> {
         ))
     })?;
     for fragment in [
-        "name = \"herterarchy-broker-sdk\"",
+        "name = \"heterarchy-broker-sdk\"",
         "Typed Python client SDK for the Rust Heterarchy Agent Broker",
         "dependencies = []",
         "where = [\"src\"]",

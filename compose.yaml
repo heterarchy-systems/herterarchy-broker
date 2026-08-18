@@ -1,6 +1,6 @@
 services:
   agent-broker:
-    image: ${AGENT_BROKER_IMAGE:-herterarchy-broker:local}
+    image: ${AGENT_BROKER_IMAGE:-heterarchy-broker:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -16,6 +16,7 @@ services:
       - no-new-privileges:true
     ports:
       - "${AGENT_BROKER_HOST:-127.0.0.1}:${AGENT_BROKER_PORT:-8811}:8811/tcp"
+      - "${AGENT_BROKER_HOST:-127.0.0.1}:${AGENT_BROKER_OPERATIONS_PORT:-9811}:8812/tcp"
     volumes:
       - agent-broker-data:/var/lib/agent-broker
 

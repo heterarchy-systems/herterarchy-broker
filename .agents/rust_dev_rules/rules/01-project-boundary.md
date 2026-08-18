@@ -2,8 +2,8 @@
 
 ## Required
 
-- `herterarchy-broker/`는 ChatToCodex에서 독립적으로 빌드·테스트·실행 가능한 Agent Broker 경계다.
-- `herterarchy-broker/`의 build/test/run은 ChatToCodex Python package, browser runtime, control panel, 또는 ChatToCodex repository-local state에 의존하지 않는다.
+- `heterarchy-broker/`는 ChatToCodex에서 독립적으로 빌드·테스트·실행 가능한 Agent Broker 경계다.
+- `heterarchy-broker/`의 build/test/run은 ChatToCodex Python package, browser runtime, control panel, 또는 ChatToCodex repository-local state에 의존하지 않는다.
 - ChatToCodex는 Agent Broker의 owner가 아니라 typed protocol을 통해 연결되는 consumer/runtime 중 하나다.
 - Broker domain은 provider-independent여야 한다.
 - 외부 runtime은 typed protocol/client adapter를 통해 Broker와 통신한다.

@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "herterarchy-broker-sdk"
+name = "heterarchy-broker-sdk"
 version = "0.1.0"
 description = "Typed Python client SDK for the Rust Heterarchy Agent Broker"
 readme = "README.md"

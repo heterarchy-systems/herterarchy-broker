@@ -5,13 +5,13 @@
 <p align="center">
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-1.97-000000?logo=rust&logoColor=white"></a>
   <a href="https://www.python.org/"><img alt="Python SDK" src="https://img.shields.io/badge/Python%20SDK-3.11%2B-3776AB?logo=python&logoColor=white"></a>
-  <a href="https://github.com/heterarchy-systems/herterarchy-broker/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heterarchy-systems/herterarchy-broker/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/heterarchy-systems/heterarchy-broker/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heterarchy-systems/heterarchy-broker/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="License" src="https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-yellow.svg">
 </p>
 
-# herterarchy-broker
+# heterarchy-broker
 
-`herterarchy-broker` is the coordination broker for the HETERARCHY platform.
+`heterarchy-broker` is the coordination broker for the HETERARCHY platform.
 
 It provides a durable, provider-independent place for agents and runtimes to publish work, join consumer groups, claim tasks, renew leases, complete work, and recover safely after failures.
 
@@ -24,7 +24,7 @@ Agent / Runtime
 Client SDK / Protocol
       │
       ▼
-herterarchy-broker
+heterarchy-broker
       │
       ├─ task coordination
       ├─ consumer groups

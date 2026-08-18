@@ -50,7 +50,7 @@ jobs:
           uv run ruff check src tests
           uv run ruff format --check src tests
           uv run pyrefly check
-          PYTHONPATH=src uv run python -m unittest -v tests.test_sdk tests.test_async_sdk
+          PYTHONPATH=src uv run python -m unittest -v tests.test_sdk tests.test_async_sdk tests.test_operations_sdk
 
       - name: Build real Broker integration binaries
         run: |
@@ -107,14 +107,16 @@ jobs:
           uv run --isolated --no-project --python 3.11 --with dist/*.whl python -c
           "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
           StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
-          AsyncClusterBrokerClient; print('wheel imports: PASS')"
+          AsyncClusterBrokerClient, BrokerOperationsClient, AsyncBrokerOperationsClient;
+          print('wheel imports: PASS')"
 
       - name: Smoke test source distribution
         run: >-
           uv run --isolated --no-project --python 3.11 --with dist/*.tar.gz python -c
           "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
           StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
-          AsyncClusterBrokerClient; print('sdist imports: PASS')"
+          AsyncClusterBrokerClient, BrokerOperationsClient, AsyncBrokerOperationsClient;
+          print('sdist imports: PASS')"
 
       - name: Publish with PyPI Trusted Publishing
         run: uv publish --trusted-publishing always dist/*
@@ -129,9 +131,10 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
       DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Validate Docker Hub configuration
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           test -n "${DOCKERHUB_USERNAME}" || {
             echo "repository variable DOCKERHUB_USERNAME is required" >&2

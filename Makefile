@@ -1,14 +1,14 @@
 DOCKER ?= docker
-DOCKER_IMAGE ?= herterarchy-broker:local
+DOCKER_IMAGE ?= heterarchy-broker:local
 DOCKER_VERSION ?= dev
 DOCKER_TAG ?= dev
 DOCKER_PLATFORMS ?= linux/amd64,linux/arm64
-DOCKER_BUILDER ?= herterarchy-broker-builder
-DOCKERHUB_REPOSITORY ?= herterarchy-broker
+DOCKER_BUILDER ?= heterarchy-broker-builder
+DOCKERHUB_REPOSITORY ?= heterarchy-broker
 DOCKER_VCS_REF := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 DOCKER_CLUSTER_ADDRESSES ?= 127.0.0.1:8811 127.0.0.1:8812 127.0.0.1:8813
 DOCKER_CLUSTER_OPERATIONS_ADDRESSES ?= 127.0.0.1:9811 127.0.0.1:9812 127.0.0.1:9813
-DOCKER_CLUSTER_E2E_PROJECT ?= herterarchy-broker-e2e
+DOCKER_CLUSTER_E2E_PROJECT ?= heterarchy-broker-e2e
 DOCKER_CLUSTER_TLS_DIR ?= $(CURDIR)/target/docker-cluster-raft-tls
 DOCKER_CLUSTER_E2E_NODE1_PORT ?= 18821
 DOCKER_CLUSTER_E2E_NODE2_PORT ?= 18822

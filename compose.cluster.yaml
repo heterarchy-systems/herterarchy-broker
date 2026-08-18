@@ -1,5 +1,5 @@
 x-agent-broker-common: &agent-broker-common
-  image: ${AGENT_BROKER_IMAGE:-herterarchy-broker:local}
+  image: ${AGENT_BROKER_IMAGE:-heterarchy-broker:local}
   build:
     context: .
     dockerfile: Dockerfile

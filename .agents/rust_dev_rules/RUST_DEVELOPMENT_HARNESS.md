@@ -15,7 +15,7 @@ Cargo는 checked-in alias를 공식 지원하고, rust-analyzer 같은 대형 Ru
 ## Current workspace shape
 
 ```text
-herterarchy-broker/
+heterarchy-broker/
 ├── Cargo.toml
 ├── .cargo/
 │   └── config.toml

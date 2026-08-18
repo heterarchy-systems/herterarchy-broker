@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Rust Production Engineering
 
-Use this skill whenever Rust code is created or changed under `herterarchy-broker/`. It supplements the inherited ChatToCodex rules and never weakens them.
+Use this skill whenever Rust code is created or changed under `heterarchy-broker/`. It supplements the inherited ChatToCodex rules and never weakens them.
 
 ## 1. Design with the type system
 

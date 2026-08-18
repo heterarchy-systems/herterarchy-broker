@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
-name = "herterarchy-broker-sdk"
+name = "heterarchy-broker-sdk"
 version = "0.1.0"
 source = { editable = "." }
 
