@@ -1,4 +1,4 @@
-use agent_broker_application::{BrokerError, BrokerErrorCode};
+use agent_broker_application::{BrokerError, BrokerErrorCode, BrokerErrorDisposition};
 use agent_broker_consensus::{ReplicatedBrokerCommandV1, ReplicatedBrokerResponseV1};
 use agent_broker_domain::commands::{
     AdvanceTermCommand, BrokerCommand, ClaimTaskCommand, CompleteTaskCommand,
@@ -52,7 +52,10 @@ fn broker_business_error_round_trips_as_application_data() -> Result<(), Box<dyn
     let encoded = serde_json::to_vec(&response)?;
     let decoded: ReplicatedBrokerResponseV1 = serde_json::from_slice(&encoded)?;
     let recovered = decoded.into_application_result()?;
-    assert_eq!(recovered, Err(error));
+    assert_eq!(
+        recovered,
+        Err(error.with_disposition(BrokerErrorDisposition::Committed))
+    );
     Ok(())
 }
 

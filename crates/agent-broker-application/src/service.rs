@@ -15,7 +15,10 @@ use agent_broker_domain::{
     TaskObjective, TaskResult, Term, TimestampMs,
 };
 
-use crate::{BrokerError, BrokerErrorCode, ConsensusAdapter};
+use crate::{
+    BrokerError, BrokerErrorCode, CommandIdentity, CommandSessionId, ConsensusAdapter,
+    SessionOwnerEpoch, SessionOwnerInstanceId,
+};
 
 /// Lightweight health metadata returned without mutating Broker state.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -95,6 +98,267 @@ where
             revision: self.consensus.revision(),
             protocol_version: 1,
         }
+    }
+
+    /// Return whether this process currently owns authority to initiate bounded maintenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when consensus cannot determine current maintenance authority.
+    pub fn maintenance_authority(&mut self) -> Result<bool, BrokerError> {
+        self.consensus.maintenance_authority()
+    }
+
+    /// Submit one validated domain mutation with a durable command identity.
+    ///
+    /// Legacy protocol-v1 use cases continue to call the operation-specific methods below. This
+    /// boundary exists for newer protocol generations that can safely retry an ambiguous
+    /// post-submit consensus response with the same session/sequence identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] for application or consensus rejection. In replicated mode a
+    /// post-submit response deadline may return `COMMIT_OUTCOME_UNKNOWN`; callers must retry only
+    /// with the exact same identity and command content.
+    pub fn propose_identified(
+        &mut self,
+        identity: CommandIdentity,
+        command: BrokerCommand,
+    ) -> Result<BrokerMutationResult, BrokerError> {
+        self.consensus.propose_identified(identity, command)
+    }
+
+    /// Acquire command-session ownership through the authoritative consensus path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when a new session is not bootstrapped at epoch 1, the expected epoch
+    /// is stale, capacity is exhausted, the owner-instance conflicts, or consensus/persistence
+    /// rejects the acquisition.
+    pub fn acquire_command_session_owner(
+        &mut self,
+        session_id: CommandSessionId,
+        expected_owner_epoch: SessionOwnerEpoch,
+        owner_instance_id: SessionOwnerInstanceId,
+    ) -> Result<SessionOwnerEpoch, BrokerError> {
+        self.consensus.acquire_command_session_owner(
+            session_id,
+            expected_owner_epoch,
+            owner_instance_id,
+        )
+    }
+
+    /// Identified variant of [`Self::ensure_namespace`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::ensure_namespace`], including
+    /// `COMMIT_OUTCOME_UNKNOWN` after a post-submit response deadline.
+    pub fn ensure_namespace_identified(
+        &mut self,
+        identity: CommandIdentity,
+        namespace_id: NamespaceId,
+    ) -> Result<NamespaceResult, BrokerError> {
+        expect_namespace(self.propose_identified(
+            identity,
+            BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {
+                namespace_id,
+                max_namespaces: self.capacity.max_namespaces(),
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::publish_task`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::publish_task`].
+    pub fn publish_task_identified(
+        &mut self,
+        identity: CommandIdentity,
+        namespace_id: NamespaceId,
+        task_id: TaskId,
+        objective: TaskObjective,
+        created_at_ms: TimestampMs,
+    ) -> Result<TaskPublishedResult, BrokerError> {
+        expect_task_published(self.propose_identified(
+            identity,
+            BrokerCommand::PublishTask(PublishTaskCommand {
+                namespace_id,
+                task_id,
+                objective,
+                created_at_ms,
+                max_namespace_tasks: self.capacity.max_tasks_per_namespace(),
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::ensure_consumer_group`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::ensure_consumer_group`].
+    pub fn ensure_consumer_group_identified(
+        &mut self,
+        identity: CommandIdentity,
+        namespace_id: NamespaceId,
+        group_id: ConsumerGroupId,
+    ) -> Result<ConsumerGroupResult, BrokerError> {
+        expect_consumer_group(self.propose_identified(
+            identity,
+            BrokerCommand::EnsureConsumerGroup(EnsureConsumerGroupCommand {
+                namespace_id,
+                group_id,
+                max_namespace_groups: self.capacity.max_groups_per_namespace(),
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::join_consumer_group`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::join_consumer_group`].
+    pub fn join_consumer_group_identified(
+        &mut self,
+        identity: CommandIdentity,
+        group_id: ConsumerGroupId,
+        member_id: MemberId,
+        capabilities: Capabilities,
+        now_ms: TimestampMs,
+    ) -> Result<ConsumerGroupResult, BrokerError> {
+        expect_consumer_group(self.propose_identified(
+            identity,
+            BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
+                group_id,
+                member_id,
+                capabilities,
+                now_ms,
+                max_group_members: self.capacity.max_members_per_group(),
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::heartbeat`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::heartbeat`].
+    pub fn heartbeat_identified(
+        &mut self,
+        identity: CommandIdentity,
+        group_id: ConsumerGroupId,
+        member_id: MemberId,
+        expected_generation: Generation,
+        now_ms: TimestampMs,
+    ) -> Result<HeartbeatResult, BrokerError> {
+        expect_heartbeat(self.propose_identified(
+            identity,
+            BrokerCommand::Heartbeat(HeartbeatCommand {
+                group_id,
+                member_id,
+                expected_generation,
+                now_ms,
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::leave_consumer_group`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::leave_consumer_group`].
+    pub fn leave_consumer_group_identified(
+        &mut self,
+        identity: CommandIdentity,
+        group_id: ConsumerGroupId,
+        member_id: MemberId,
+        expected_generation: Generation,
+    ) -> Result<ConsumerGroupResult, BrokerError> {
+        expect_consumer_group(self.propose_identified(
+            identity,
+            BrokerCommand::LeaveConsumerGroup(LeaveConsumerGroupCommand {
+                group_id,
+                member_id,
+                expected_generation,
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::claim_task`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::claim_task`].
+    pub fn claim_task_identified(
+        &mut self,
+        identity: CommandIdentity,
+        input: ClaimTaskInput,
+    ) -> Result<TaskClaimResult, BrokerError> {
+        expect_task_claim(self.propose_identified(
+            identity,
+            BrokerCommand::ClaimTask(ClaimTaskCommand {
+                group_id: input.group_id,
+                member_id: input.member_id,
+                expected_term: input.expected_term,
+                expected_generation: input.expected_generation,
+                lease_id: input.lease_id,
+                now_ms: input.now_ms,
+                lease_duration_ms: input.lease_duration.get(),
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::renew_task_lease`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::renew_task_lease`].
+    pub fn renew_task_lease_identified(
+        &mut self,
+        identity: CommandIdentity,
+        input: RenewTaskLeaseInput,
+    ) -> Result<TaskLeaseRenewedResult, BrokerError> {
+        expect_task_lease_renewed(self.propose_identified(
+            identity,
+            BrokerCommand::RenewTaskLease(RenewTaskLeaseCommand {
+                task_id: input.task_id,
+                group_id: input.group_id,
+                member_id: input.member_id,
+                expected_term: input.expected_term,
+                expected_generation: input.expected_generation,
+                expected_lease_epoch: input.expected_lease_epoch,
+                lease_id: input.lease_id,
+                now_ms: input.now_ms,
+                lease_duration_ms: input.lease_duration.get(),
+            }),
+        )?)
+    }
+
+    /// Identified variant of [`Self::complete_task`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] under the same conditions as [`Self::complete_task`].
+    pub fn complete_task_identified(
+        &mut self,
+        identity: CommandIdentity,
+        input: CompleteTaskInput,
+    ) -> Result<TaskCompletedResult, BrokerError> {
+        expect_task_completed(self.propose_identified(
+            identity,
+            BrokerCommand::CompleteTask(CompleteTaskCommand {
+                task_id: input.task_id,
+                group_id: input.group_id,
+                member_id: input.member_id,
+                expected_term: input.expected_term,
+                expected_generation: input.expected_generation,
+                expected_lease_epoch: input.expected_lease_epoch,
+                lease_id: input.lease_id,
+                result: input.result,
+                completed_at_ms: input.completed_at_ms,
+            }),
+        )?)
     }
 
     /// Return the underlying consensus adapter, for runtime composition/shutdown only.

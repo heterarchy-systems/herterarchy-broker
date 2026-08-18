@@ -12,11 +12,14 @@ agent-broker-domain = { path = "../agent-broker-domain" }
 agent-broker-storage = { path = "../agent-broker-storage" }
 openraft.workspace = true
 redb.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 tempfile.workspace = true
 
 [lints]

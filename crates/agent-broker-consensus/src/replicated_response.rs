@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use agent_broker_application::{BrokerError, BrokerErrorCode};
+use agent_broker_application::{BrokerError, BrokerErrorCode, BrokerErrorDisposition};
 use agent_broker_domain::results::{
     BrokerMutationResult, CompletedTasksPrunedResult, ConsumerGroupResult, HeartbeatResult,
     MutationMetadata, NamespaceResult, StaleMembersReapedResult, TaskClaimResult,
@@ -23,28 +23,77 @@ use serde::{Deserialize, Serialize};
 pub enum ReplicatedBrokerResponseV1 {
     /// Response placeholder for committed Raft blank/membership entries.
     RaftControl,
+    /// Broker-authoritative command-session owner acquisition result.
+    SessionOwnerAcquired {
+        owner_epoch: u64,
+    },
     Success(ReplicatedBrokerMutationResultV1),
     ApplicationError(ReplicatedBrokerErrorV1),
 }
 
 impl ReplicatedBrokerResponseV1 {
     /// Convert the deterministic Broker apply result into Raft application response data.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplicatedResponseError`] if a successful mutation result cannot be represented by
+    /// the versioned replicated response format.
     pub fn from_application_result(
         result: Result<BrokerMutationResult, BrokerError>,
     ) -> Result<Self, ReplicatedResponseError> {
         match result {
             Ok(result) => Ok(Self::Success(result.try_into()?)),
-            Err(error) => Ok(Self::ApplicationError(error.into())),
+            Err(error) => Ok(Self::ApplicationError(
+                error
+                    .with_disposition(BrokerErrorDisposition::Committed)
+                    .into(),
+            )),
         }
     }
 
+    /// Encode a deterministic rejection that occurred before an identified command became a
+    /// stored session outcome.
+    ///
+    /// # Errors
+    ///
+    /// This conversion is currently infallible; the result type preserves a stable interface with
+    /// other replicated response constructors.
+    pub fn from_pre_application_rejection(
+        error: BrokerError,
+    ) -> Result<Self, ReplicatedResponseError> {
+        Ok(Self::ApplicationError(
+            error
+                .with_disposition(BrokerErrorDisposition::Rejected)
+                .into(),
+        ))
+    }
+
+    /// Normalize a response that was recovered from a persisted command-session `last_outcome`.
+    ///
+    /// Older snapshots predate commit-aware error disposition and therefore decode missing error
+    /// disposition as `UNKNOWN`. Presence inside `last_outcome` is stronger evidence: only a domain
+    /// application result is stored there, after the identified command passed pre-application
+    /// fencing checks and became the authoritative session outcome. Such legacy errors are therefore
+    /// committed and can be upgraded safely during snapshot recovery.
+    pub(crate) fn normalize_stored_session_outcome(mut self) -> Self {
+        if let Self::ApplicationError(error) = &mut self {
+            error.disposition = ReplicatedBrokerErrorDispositionV1::Committed;
+        }
+        self
+    }
+
     /// Recover the application-layer result after a committed Raft write completes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplicatedResponseError`] for Raft control entries or when replicated application
+    /// data fails domain validation while being reconstructed.
     pub fn into_application_result(
         self,
     ) -> Result<Result<BrokerMutationResult, BrokerError>, ReplicatedResponseError> {
         match self {
-            Self::RaftControl => Err(ReplicatedResponseError(
-                "Raft control entry does not contain a Broker application result".to_owned(),
+            Self::RaftControl | Self::SessionOwnerAcquired { .. } => Err(ReplicatedResponseError(
+                "consensus control entry does not contain a Broker application result".to_owned(),
             )),
             Self::Success(result) => Ok(Ok(result.try_into()?)),
             Self::ApplicationError(error) => Ok(Err(error.into())),
@@ -56,6 +105,8 @@ impl ReplicatedBrokerResponseV1 {
 pub struct ReplicatedBrokerErrorV1 {
     code: ReplicatedBrokerErrorCodeV1,
     message: String,
+    #[serde(default)]
+    disposition: ReplicatedBrokerErrorDispositionV1,
 }
 
 impl From<BrokerError> for ReplicatedBrokerErrorV1 {
@@ -63,13 +114,43 @@ impl From<BrokerError> for ReplicatedBrokerErrorV1 {
         Self {
             code: error.code().into(),
             message: error.message().to_owned(),
+            disposition: error.disposition().into(),
         }
     }
 }
 
 impl From<ReplicatedBrokerErrorV1> for BrokerError {
     fn from(error: ReplicatedBrokerErrorV1) -> Self {
-        Self::new(error.code.into(), error.message)
+        Self::new(error.code.into(), error.message).with_disposition(error.disposition.into())
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ReplicatedBrokerErrorDispositionV1 {
+    Committed,
+    Rejected,
+    #[default]
+    Unknown,
+}
+
+impl From<BrokerErrorDisposition> for ReplicatedBrokerErrorDispositionV1 {
+    fn from(disposition: BrokerErrorDisposition) -> Self {
+        match disposition {
+            BrokerErrorDisposition::Committed => Self::Committed,
+            BrokerErrorDisposition::Rejected => Self::Rejected,
+            BrokerErrorDisposition::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<ReplicatedBrokerErrorDispositionV1> for BrokerErrorDisposition {
+    fn from(disposition: ReplicatedBrokerErrorDispositionV1) -> Self {
+        match disposition {
+            ReplicatedBrokerErrorDispositionV1::Committed => Self::Committed,
+            ReplicatedBrokerErrorDispositionV1::Rejected => Self::Rejected,
+            ReplicatedBrokerErrorDispositionV1::Unknown => Self::Unknown,
+        }
     }
 }
 
@@ -83,6 +164,7 @@ enum ReplicatedBrokerErrorCodeV1 {
     StaleFence,
     PersistenceError,
     TransportError,
+    CommitOutcomeUnknown,
     InternalError,
 }
 
@@ -96,6 +178,7 @@ impl From<BrokerErrorCode> for ReplicatedBrokerErrorCodeV1 {
             BrokerErrorCode::StaleFence => Self::StaleFence,
             BrokerErrorCode::PersistenceError => Self::PersistenceError,
             BrokerErrorCode::TransportError => Self::TransportError,
+            BrokerErrorCode::CommitOutcomeUnknown => Self::CommitOutcomeUnknown,
             BrokerErrorCode::InternalError => Self::InternalError,
         }
     }
@@ -111,6 +194,7 @@ impl From<ReplicatedBrokerErrorCodeV1> for BrokerErrorCode {
             ReplicatedBrokerErrorCodeV1::StaleFence => Self::StaleFence,
             ReplicatedBrokerErrorCodeV1::PersistenceError => Self::PersistenceError,
             ReplicatedBrokerErrorCodeV1::TransportError => Self::TransportError,
+            ReplicatedBrokerErrorCodeV1::CommitOutcomeUnknown => Self::CommitOutcomeUnknown,
             ReplicatedBrokerErrorCodeV1::InternalError => Self::InternalError,
         }
     }
@@ -316,61 +400,13 @@ impl TryFrom<ReplicatedBrokerMutationResultV1> for BrokerMutationResult {
 
     fn try_from(result: ReplicatedBrokerMutationResultV1) -> Result<Self, Self::Error> {
         match result {
-            ReplicatedBrokerMutationResultV1::Namespace {
-                metadata,
-                namespace_id,
-                namespace_revision,
-            } => Ok(Self::Namespace(NamespaceResult {
-                metadata: metadata.try_into()?,
-                namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
-                namespace_revision: Revision::new(namespace_revision),
-            })),
-            ReplicatedBrokerMutationResultV1::TaskPublished {
-                metadata,
-                task_id,
-                task_revision,
-                status,
-            } => Ok(Self::TaskPublished(TaskPublishedResult {
-                metadata: metadata.try_into()?,
-                task_id: TaskId::new(task_id).map_err(validation_error)?,
-                task_revision: Revision::new(task_revision),
-                status: status.into(),
-            })),
-            ReplicatedBrokerMutationResultV1::ConsumerGroup {
-                metadata,
-                group_id,
-                generation,
-                group_revision,
-                member_count,
-            } => Ok(Self::ConsumerGroup(ConsumerGroupResult {
-                metadata: metadata.try_into()?,
-                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                generation: Generation::new(generation),
-                group_revision: Revision::new(group_revision),
-                member_count: u64_to_usize(member_count, "member_count")?,
-            })),
-            ReplicatedBrokerMutationResultV1::Heartbeat {
-                metadata,
-                group_id,
-                member_id,
-                generation,
-                member_revision,
-            } => Ok(Self::Heartbeat(HeartbeatResult {
-                metadata: metadata.try_into()?,
-                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
-                generation: Generation::new(generation),
-                member_revision: Revision::new(member_revision),
-            })),
-            ReplicatedBrokerMutationResultV1::StaleMembersReaped {
-                metadata,
-                reaped_count,
-                affected_group_count,
-            } => Ok(Self::StaleMembersReaped(StaleMembersReapedResult {
-                metadata: metadata.try_into()?,
-                reaped_count: u64_to_usize(reaped_count, "reaped_count")?,
-                affected_group_count: u64_to_usize(affected_group_count, "affected_group_count")?,
-            })),
+            result @ (ReplicatedBrokerMutationResultV1::Namespace { .. }
+            | ReplicatedBrokerMutationResultV1::TaskPublished { .. }
+            | ReplicatedBrokerMutationResultV1::ConsumerGroup { .. }
+            | ReplicatedBrokerMutationResultV1::Heartbeat { .. }
+            | ReplicatedBrokerMutationResultV1::StaleMembersReaped { .. }) => {
+                convert_coordination_result(result)
+            }
             ReplicatedBrokerMutationResultV1::TaskClaim {
                 metadata,
                 task_id,
@@ -382,12 +418,12 @@ impl TryFrom<ReplicatedBrokerMutationResultV1> for BrokerMutationResult {
                 generation,
             } => {
                 validate_claim_option_shape(
-                    &task_id,
-                    &objective,
-                    &task_revision,
-                    &lease_id,
-                    &lease_epoch,
-                    &lease_expires_at_ms,
+                    task_id.as_deref(),
+                    objective.as_deref(),
+                    task_revision,
+                    lease_id.as_deref(),
+                    lease_epoch,
+                    lease_expires_at_ms,
                 )?;
                 Ok(Self::TaskClaim(TaskClaimResult {
                     metadata: metadata.try_into()?,
@@ -453,6 +489,73 @@ impl TryFrom<ReplicatedBrokerMutationResultV1> for BrokerMutationResult {
     }
 }
 
+fn convert_coordination_result(
+    result: ReplicatedBrokerMutationResultV1,
+) -> Result<BrokerMutationResult, ReplicatedResponseError> {
+    match result {
+        ReplicatedBrokerMutationResultV1::Namespace {
+            metadata,
+            namespace_id,
+            namespace_revision,
+        } => Ok(BrokerMutationResult::Namespace(NamespaceResult {
+            metadata: metadata.try_into()?,
+            namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
+            namespace_revision: Revision::new(namespace_revision),
+        })),
+        ReplicatedBrokerMutationResultV1::TaskPublished {
+            metadata,
+            task_id,
+            task_revision,
+            status,
+        } => Ok(BrokerMutationResult::TaskPublished(TaskPublishedResult {
+            metadata: metadata.try_into()?,
+            task_id: TaskId::new(task_id).map_err(validation_error)?,
+            task_revision: Revision::new(task_revision),
+            status: status.into(),
+        })),
+        ReplicatedBrokerMutationResultV1::ConsumerGroup {
+            metadata,
+            group_id,
+            generation,
+            group_revision,
+            member_count,
+        } => Ok(BrokerMutationResult::ConsumerGroup(ConsumerGroupResult {
+            metadata: metadata.try_into()?,
+            group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
+            generation: Generation::new(generation),
+            group_revision: Revision::new(group_revision),
+            member_count: u64_to_usize(member_count, "member_count")?,
+        })),
+        ReplicatedBrokerMutationResultV1::Heartbeat {
+            metadata,
+            group_id,
+            member_id,
+            generation,
+            member_revision,
+        } => Ok(BrokerMutationResult::Heartbeat(HeartbeatResult {
+            metadata: metadata.try_into()?,
+            group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
+            member_id: MemberId::new(member_id).map_err(validation_error)?,
+            generation: Generation::new(generation),
+            member_revision: Revision::new(member_revision),
+        })),
+        ReplicatedBrokerMutationResultV1::StaleMembersReaped {
+            metadata,
+            reaped_count,
+            affected_group_count,
+        } => Ok(BrokerMutationResult::StaleMembersReaped(
+            StaleMembersReapedResult {
+                metadata: metadata.try_into()?,
+                reaped_count: u64_to_usize(reaped_count, "reaped_count")?,
+                affected_group_count: u64_to_usize(affected_group_count, "affected_group_count")?,
+            },
+        )),
+        _ => Err(ReplicatedResponseError(
+            "replicated Broker response was routed to the wrong conversion family".to_owned(),
+        )),
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ReplicatedResponseError(String);
 
@@ -465,12 +568,12 @@ impl fmt::Display for ReplicatedResponseError {
 impl Error for ReplicatedResponseError {}
 
 fn validate_claim_option_shape(
-    task_id: &Option<String>,
-    objective: &Option<String>,
-    task_revision: &Option<u64>,
-    lease_id: &Option<String>,
-    lease_epoch: &Option<u64>,
-    lease_expires_at_ms: &Option<u64>,
+    task_id: Option<&str>,
+    objective: Option<&str>,
+    task_revision: Option<u64>,
+    lease_id: Option<&str>,
+    lease_epoch: Option<u64>,
+    lease_expires_at_ms: Option<u64>,
 ) -> Result<(), ReplicatedResponseError> {
     let presence = [
         task_id.is_some(),
@@ -502,4 +605,50 @@ fn usize_to_u64(value: usize, field: &'static str) -> Result<u64, ReplicatedResp
 fn u64_to_usize(value: u64, field: &'static str) -> Result<usize, ReplicatedResponseError> {
     usize::try_from(value)
         .map_err(|_| ReplicatedResponseError(format!("{field} exceeds platform usize")))
+}
+
+#[cfg(test)]
+mod tests {
+    use agent_broker_application::{BrokerErrorCode, BrokerErrorDisposition};
+
+    use super::ReplicatedBrokerResponseV1;
+
+    #[test]
+    fn legacy_replicated_error_without_disposition_decodes_as_unknown()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = br#"{"status":"application_error","payload":{"code":"CONFLICT","message":"legacy error"}}"#;
+        let response: ReplicatedBrokerResponseV1 = serde_json::from_slice(legacy)?;
+        let application_result = response.into_application_result()?;
+        let error = match application_result {
+            Ok(result) => {
+                return Err(
+                    format!("legacy error unexpectedly decoded as success: {result:?}").into(),
+                );
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), BrokerErrorCode::Conflict);
+        assert_eq!(error.message(), "legacy error");
+        assert_eq!(error.disposition(), BrokerErrorDisposition::Unknown);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_error_becomes_committed_when_recovered_as_stored_session_outcome()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let legacy = br#"{"status":"application_error","payload":{"code":"NOT_FOUND","message":"legacy committed error"}}"#;
+        let response: ReplicatedBrokerResponseV1 = serde_json::from_slice(legacy)?;
+        let application_result = response
+            .normalize_stored_session_outcome()
+            .into_application_result()?;
+        let error = match application_result {
+            Ok(result) => {
+                return Err(format!("legacy stored error decoded as success: {result:?}").into());
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), BrokerErrorCode::NotFound);
+        assert_eq!(error.disposition(), BrokerErrorDisposition::Committed);
+        Ok(())
+    }
 }

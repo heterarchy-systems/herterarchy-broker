@@ -7,14 +7,16 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 const RAFT_LOG_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("raft_log_v1");
 const RAFT_META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("raft_meta_v1");
 
-/// Crash-safe byte persistence shared by the one-node OpenRaft log and snapshot adapters.
+/// Crash-safe byte persistence shared by the one-node `OpenRaft` log and snapshot adapters.
 ///
-/// redb owns transactional durability. OpenRaft serialization stays in the higher consensus layer so
+/// `redb` owns transactional durability. `OpenRaft` serialization stays in the higher consensus layer so
 /// this type does not become a second interpretation of Raft data structures.
 #[derive(Debug, Clone)]
 pub(crate) struct RedbRaftPersistence {
     database: Arc<Database>,
 }
+
+type OptionalMetaPair = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 impl RedbRaftPersistence {
     pub(crate) fn open(path: impl AsRef<Path>) -> io::Result<Self> {
@@ -132,7 +134,7 @@ impl RedbRaftPersistence {
         &self,
         first_key: &'static str,
         second_key: &'static str,
-    ) -> io::Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+    ) -> io::Result<OptionalMetaPair> {
         let transaction = self.database.begin_read().map_err(io_other)?;
         let table = transaction.open_table(RAFT_META_TABLE).map_err(io_other)?;
         let first = table
@@ -174,4 +176,36 @@ impl RedbRaftPersistence {
 
 fn io_other(error: impl std::error::Error + Send + Sync + 'static) -> io::Error {
     io::Error::other(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io;
+
+    use tempfile::tempdir;
+
+    use super::RedbRaftPersistence;
+
+    #[test]
+    fn physically_corrupted_redb_file_fails_without_silent_reinitialization() -> io::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("corrupted.redb");
+        let corrupt_bytes = b"this-is-not-a-redb-database";
+        fs::write(&path, corrupt_bytes)?;
+
+        let open_result = RedbRaftPersistence::open(&path);
+        if open_result.is_ok() {
+            return Err(io::Error::other(
+                "physically corrupted redb file unexpectedly opened",
+            ));
+        }
+        let bytes_after_failed_open = fs::read(&path)?;
+        if bytes_after_failed_open != corrupt_bytes {
+            return Err(io::Error::other(
+                "failed redb open modified or silently reinitialized corrupted durable bytes",
+            ));
+        }
+        Ok(())
+    }
 }

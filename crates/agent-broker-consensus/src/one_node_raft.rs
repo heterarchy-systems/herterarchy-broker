@@ -45,6 +45,10 @@ impl OneNodeRaftConfig {
     }
 
     /// Override the number of committed logs between automatic snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when `interval` is zero.
     pub fn with_snapshot_log_interval(mut self, interval: u64) -> Result<Self, BrokerError> {
         if interval == 0 {
             return Err(BrokerError::new(
@@ -75,11 +79,11 @@ pub struct OneNodeRaftProgress {
     pub remote_attempt_count: u64,
 }
 
-/// Synchronous `ConsensusAdapter` facade backed by a real one-node OpenRaft engine.
+/// Synchronous `ConsensusAdapter` facade backed by a real one-node `OpenRaft` engine.
 ///
-/// OpenRaft and its Tokio runtime live on a dedicated controller thread. This preserves the
+/// `OpenRaft` and its Tokio runtime live on a dedicated controller thread. This preserves the
 /// synchronous application boundary without ever nesting `Runtime::block_on` inside a caller's
-/// async executor. The actual Broker state remains exclusively owned by `RaftStateMachine`.
+/// async executor. The actual Broker state remains exclusively owned by `BrokerStateMachine`.
 pub struct OneNodeRaftConsensusAdapter {
     requests: SyncSender<ControllerRequest>,
     controller: Option<JoinHandle<()>>,
@@ -100,7 +104,12 @@ impl std::fmt::Debug for OneNodeRaftConsensusAdapter {
 }
 
 impl OneNodeRaftConsensusAdapter {
-    /// Open or recover a durable one-node OpenRaft group and wait until node 1 is leader.
+    /// Open or recover a durable one-node `OpenRaft` group and wait until node 1 is leader.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] if the durable state directory, controller thread, Tokio runtime,
+    /// Raft storage/recovery, or local leadership initialization fails.
     pub fn open(config: OneNodeRaftConfig) -> Result<Self, BrokerError> {
         ensure_parent_directory(config.state_path())?;
 
@@ -108,7 +117,7 @@ impl OneNodeRaftConsensusAdapter {
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let controller = thread::Builder::new()
             .name("agent-broker-one-node-raft".to_owned())
-            .spawn(move || run_controller(config, receiver, startup_sender))
+            .spawn(move || run_controller(config, &receiver, &startup_sender))
             .map_err(|error| {
                 BrokerError::new(
                     BrokerErrorCode::InternalError,
@@ -140,6 +149,11 @@ impl OneNodeRaftConsensusAdapter {
     }
 
     /// Read distinct Raft and Broker progress pointers without exposing mutable state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] if the adapter is fail-stopped, the controller is unavailable, or
+    /// the Raft engine cannot provide current progress.
     pub fn progress(&mut self) -> Result<OneNodeRaftProgress, BrokerError> {
         self.ensure_available()?;
         let reply = self.request(|sender| ControllerRequest::Progress { reply: sender })?;
@@ -150,6 +164,11 @@ impl OneNodeRaftConsensusAdapter {
     }
 
     /// Trigger and wait for a durable snapshot. Intended for parity/recovery verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] if the adapter is unavailable, snapshot persistence fails, or the
+    /// snapshot does not reach the committed/applied target before the bounded deadline.
     pub fn trigger_snapshot(&mut self) -> Result<OneNodeRaftProgress, BrokerError> {
         self.ensure_available()?;
         let reply = self.request(|sender| ControllerRequest::TriggerSnapshot { reply: sender })?;
@@ -159,7 +178,12 @@ impl OneNodeRaftConsensusAdapter {
         Ok(progress)
     }
 
-    /// Shut down OpenRaft and join its dedicated controller thread.
+    /// Shut down `OpenRaft` and join its dedicated controller thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] if the controller cannot complete shutdown or its thread cannot be
+    /// joined cleanly.
     pub fn shutdown(mut self) -> Result<(), BrokerError> {
         let shutdown_result = if self.poisoned {
             Ok(())
@@ -291,8 +315,8 @@ struct RunningOneNodeRaft {
 
 fn run_controller(
     config: OneNodeRaftConfig,
-    receiver: Receiver<ControllerRequest>,
-    startup_sender: SyncSender<Result<OneNodeRaftProgress, BrokerError>>,
+    receiver: &Receiver<ControllerRequest>,
+    startup_sender: &SyncSender<Result<OneNodeRaftProgress, BrokerError>>,
 ) {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_time()
@@ -433,9 +457,10 @@ impl RunningOneNodeRaft {
                 format!("failed to encode Broker command for Raft: {error}"),
             )
         })?;
+        let proposal = crate::ReplicatedBrokerProposalV1::legacy(data);
         let response = self
             .raft
-            .client_write::<tokio::sync::oneshot::error::RecvError>(data)
+            .client_write::<tokio::sync::oneshot::error::RecvError>(proposal)
             .await
             .map_err(|error| raft_engine_error("client_write", error))?;
         let result = response.data.into_application_result().map_err(|error| {
@@ -490,9 +515,10 @@ impl RunningOneNodeRaft {
                 format!("failed to encode internal Raft term-advance command: {error}"),
             )
         })?;
+        let proposal = crate::ReplicatedBrokerProposalV1::legacy(data);
         let response = self
             .raft
-            .client_write::<tokio::sync::oneshot::error::RecvError>(data)
+            .client_write::<tokio::sync::oneshot::error::RecvError>(proposal)
             .await
             .map_err(|error| raft_engine_error("term synchronization", error))?;
         match response.data.into_application_result().map_err(|error| {

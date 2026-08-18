@@ -6,6 +6,9 @@
 /.ruff_cache/
 **/__pycache__/
 *.py[cod]
+*.egg-info/
+/sdks/python/build/
+/sdks/python/dist/
 
 /fuzz/target/
 /fuzz/corpus/
@@ -15,3 +18,5 @@
 
 .DS_Store
 **/.DS_Store
+
+/.chatgpt2codex/

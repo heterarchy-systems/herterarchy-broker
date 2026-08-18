@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Final release validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97
+        run: |
+          rustup toolchain install 1.97 --profile minimal --component clippy,rustfmt
+          rustup default 1.97
+
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.3"
+          python-version: "3.11"
+
+      - name: Verify tag matches Python package version
+        working-directory: sdks/python
+        run: |
+          package_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "${GITHUB_REF_NAME}" = "v${package_version}" || {
+            echo "release tag ${GITHUB_REF_NAME} does not match Python package version v${package_version}" >&2
+            exit 2
+          }
+
+      - name: Run canonical Rust CI
+        run: cargo xtask ci
+
+      - name: Sync locked Python development environment
+        working-directory: sdks/python
+        run: uv sync --locked --dev
+
+      - name: Run Python quality gates
+        working-directory: sdks/python
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+          uv run pyrefly check
+          PYTHONPATH=src uv run python -m unittest -v tests.test_sdk tests.test_async_sdk
+
+      - name: Build real Broker integration binaries
+        run: |
+          cargo build -q -p agent-broker-runtime --bin agentbrokerd
+          cargo build -q -p agent-broker-consensus --example generate_cluster_tls
+
+      - name: Run Python real Rust integration
+        working-directory: sdks/python
+        env:
+          PYTHONPATH: src
+          AGENT_BROKER_RUN_RUST_INTEGRATION: "1"
+          AGENT_BROKER_RUN_CLUSTER_INTEGRATION: "1"
+          AGENT_BROKER_RUN_ASYNC_RUST_INTEGRATION: "1"
+          AGENT_BROKER_RUN_ASYNC_CLUSTER_INTEGRATION: "1"
+        run: >-
+          uv run --no-project --python 3.11 python -m unittest -v
+          tests.test_rust_integration
+          tests.test_cluster_integration
+          tests.test_async_integration
+
+  pypi:
+    name: Publish Python SDK to PyPI
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: pypi
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: sdks/python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.3"
+          python-version: "3.11"
+
+      - name: Verify tag matches package version
+        run: |
+          package_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Smoke test wheel
+        run: >-
+          uv run --isolated --no-project --python 3.11 --with dist/*.whl python -c
+          "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
+          StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
+          AsyncClusterBrokerClient; print('wheel imports: PASS')"
+
+      - name: Smoke test source distribution
+        run: >-
+          uv run --isolated --no-project --python 3.11 --with dist/*.tar.gz python -c
+          "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
+          StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
+          AsyncClusterBrokerClient; print('sdist imports: PASS')"
+
+      - name: Publish with PyPI Trusted Publishing
+        run: uv publish --trusted-publishing always dist/*
+
+  docker:
+    name: Publish Docker Hub multi-arch image
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+      DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Validate Docker Hub configuration
+        run: |
+          test -n "${DOCKERHUB_USERNAME}" || {
+            echo "repository variable DOCKERHUB_USERNAME is required" >&2
+            exit 2
+          }
+          test -n "${DOCKERHUB_REPOSITORY}" || {
+            echo "repository variable DOCKERHUB_REPOSITORY is required" >&2
+            exit 2
+          }
+          test -n "${DOCKERHUB_TOKEN}" || {
+            echo "repository secret DOCKERHUB_TOKEN is required" >&2
+            exit 2
+          }
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub with PAT
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive release image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_REPOSITORY }}
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build and push multi-arch image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            VCS_REF=${{ github.sha }}
+
+      - name: Record published digest
+        run: |
+          echo "Docker digest: \`${{ steps.build.outputs.digest }}\`" >> "${GITHUB_STEP_SUMMARY}"

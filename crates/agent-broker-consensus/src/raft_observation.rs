@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use agent_broker_domain::{BrokerState, Revision, Term};
 
-/// Lock-free read-only projection of the committed Broker state owned by OpenRaft.
+/// Lock-free read-only projection of the committed Broker state owned by `OpenRaft`.
 ///
 /// The Raft state machine remains the sole mutable owner. These atomics expose only scalar
 /// observability needed by the synchronous `ConsensusAdapter` facade; callers can never mutate

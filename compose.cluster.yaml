@@ -1,0 +1,161 @@
+x-agent-broker-common: &agent-broker-common
+  image: ${AGENT_BROKER_IMAGE:-herterarchy-broker:local}
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      VERSION: ${AGENT_BROKER_VERSION:-dev}
+      VCS_REF: ${AGENT_BROKER_VCS_REF:-local}
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  expose:
+    - "18811"
+    - "8812"
+  networks:
+    client:
+    raft:
+
+services:
+  agent-broker-2:
+    <<: *agent-broker-common
+    command:
+      - serve-cluster
+      - --node-id
+      - "2"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8811"
+      - --operations-port
+      - "8812"
+      - --container-bridge-bind
+      - --raft-host
+      - 0.0.0.0
+      - --raft-port
+      - "18811"
+      - --raft-tls-dir
+      - /run/agent-broker/raft-tls
+      - --raft-node
+      - 1=10.77.0.11:18811
+      - --raft-node
+      - 2=10.77.0.12:18811
+      - --raft-node
+      - 3=10.77.0.13:18811
+      - --state-path
+      - /var/lib/agent-broker/raft.redb
+    ports:
+      - "${AGENT_BROKER_NODE2_HOST:-127.0.0.1}:${AGENT_BROKER_NODE2_PORT:-8812}:8811/tcp"
+      - "${AGENT_BROKER_NODE2_HOST:-127.0.0.1}:${AGENT_BROKER_NODE2_OPERATIONS_PORT:-9812}:8812/tcp"
+    volumes:
+      - agent-broker-node-2:/var/lib/agent-broker
+      - ${AGENT_BROKER_RAFT_TLS_DIR:?AGENT_BROKER_RAFT_TLS_DIR is required}:/run/agent-broker/raft-tls:ro
+    networks:
+      client:
+      raft:
+        ipv4_address: 10.77.0.12
+        aliases:
+          - raft-node-2
+
+  agent-broker-3:
+    <<: *agent-broker-common
+    command:
+      - serve-cluster
+      - --node-id
+      - "3"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8811"
+      - --operations-port
+      - "8812"
+      - --container-bridge-bind
+      - --raft-host
+      - 0.0.0.0
+      - --raft-port
+      - "18811"
+      - --raft-tls-dir
+      - /run/agent-broker/raft-tls
+      - --raft-node
+      - 1=10.77.0.11:18811
+      - --raft-node
+      - 2=10.77.0.12:18811
+      - --raft-node
+      - 3=10.77.0.13:18811
+      - --state-path
+      - /var/lib/agent-broker/raft.redb
+    ports:
+      - "${AGENT_BROKER_NODE3_HOST:-127.0.0.1}:${AGENT_BROKER_NODE3_PORT:-8813}:8811/tcp"
+      - "${AGENT_BROKER_NODE3_HOST:-127.0.0.1}:${AGENT_BROKER_NODE3_OPERATIONS_PORT:-9813}:8812/tcp"
+    volumes:
+      - agent-broker-node-3:/var/lib/agent-broker
+      - ${AGENT_BROKER_RAFT_TLS_DIR:?AGENT_BROKER_RAFT_TLS_DIR is required}:/run/agent-broker/raft-tls:ro
+    networks:
+      client:
+      raft:
+        ipv4_address: 10.77.0.13
+        aliases:
+          - raft-node-3
+
+  agent-broker-1:
+    <<: *agent-broker-common
+    depends_on:
+      agent-broker-2:
+        condition: service_healthy
+      agent-broker-3:
+        condition: service_healthy
+    command:
+      - serve-cluster
+      - --node-id
+      - "1"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8811"
+      - --operations-port
+      - "8812"
+      - --container-bridge-bind
+      - --raft-host
+      - 0.0.0.0
+      - --raft-port
+      - "18811"
+      - --raft-tls-dir
+      - /run/agent-broker/raft-tls
+      - --raft-node
+      - 1=10.77.0.11:18811
+      - --raft-node
+      - 2=10.77.0.12:18811
+      - --raft-node
+      - 3=10.77.0.13:18811
+      - --bootstrap
+      - --state-path
+      - /var/lib/agent-broker/raft.redb
+    ports:
+      - "${AGENT_BROKER_NODE1_HOST:-127.0.0.1}:${AGENT_BROKER_NODE1_PORT:-8811}:8811/tcp"
+      - "${AGENT_BROKER_NODE1_HOST:-127.0.0.1}:${AGENT_BROKER_NODE1_OPERATIONS_PORT:-9811}:8812/tcp"
+    volumes:
+      - agent-broker-node-1:/var/lib/agent-broker
+      - ${AGENT_BROKER_RAFT_TLS_DIR:?AGENT_BROKER_RAFT_TLS_DIR is required}:/run/agent-broker/raft-tls:ro
+    networks:
+      client:
+      raft:
+        ipv4_address: 10.77.0.11
+        aliases:
+          - raft-node-1
+
+volumes:
+  agent-broker-node-1:
+  agent-broker-node-2:
+  agent-broker-node-3:
+
+networks:
+  client:
+  raft:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24

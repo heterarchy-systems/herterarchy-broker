@@ -13,6 +13,7 @@ pub enum RuntimeError {
         operation: &'static str,
         source: io::Error,
     },
+    StateOwnerSaturated,
     StateOwnerStopped,
     StateOwnerReplyDropped,
     ClockBeforeUnixEpoch,
@@ -33,6 +34,9 @@ impl fmt::Display for RuntimeError {
                 formatter.write_str("Broker state is already owned by another process")
             }
             Self::Io { operation, source } => write!(formatter, "{operation}: {source}"),
+            Self::StateOwnerSaturated => {
+                formatter.write_str("Broker state owner queue is saturated")
+            }
             Self::StateOwnerStopped => formatter.write_str("Broker state owner is not running"),
             Self::StateOwnerReplyDropped => {
                 formatter.write_str("Broker state owner dropped a response")

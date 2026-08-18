@@ -15,7 +15,7 @@ use crate::raft_type_config::{AgentBrokerRaftNodeId, AgentBrokerRaftTypeConfig};
 
 /// One-node-only network factory.
 ///
-/// A valid single-node OpenRaft group never needs to emit an RPC to a peer. If OpenRaft ever asks
+/// A valid single-node `OpenRaft` group never needs to emit an RPC to a peer. If `OpenRaft` ever asks
 /// this factory for a client, the returned client fails every operation with `Unreachable` and
 /// increments an observation counter. Tests assert the count stays at zero so one-node parity cannot
 /// accidentally depend on an undeclared in-process transport.

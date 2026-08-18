@@ -1,0 +1,23 @@
+services:
+  agent-broker:
+    image: ${AGENT_BROKER_IMAGE:-herterarchy-broker:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${AGENT_BROKER_VERSION:-dev}
+        VCS_REF: ${AGENT_BROKER_VCS_REF:-local}
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${AGENT_BROKER_HOST:-127.0.0.1}:${AGENT_BROKER_PORT:-8811}:8811/tcp"
+    volumes:
+      - agent-broker-data:/var/lib/agent-broker
+
+volumes:
+  agent-broker-data:

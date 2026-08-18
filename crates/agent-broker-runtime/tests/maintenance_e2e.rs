@@ -1,17 +1,25 @@
 use std::error::Error;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use agent_broker_application::BrokerApplicationService;
+use agent_broker_application::{
+    BrokerApplicationService, BrokerError, BrokerErrorCode, ConsensusAdapter,
+};
 use agent_broker_consensus::StandaloneConsensusAdapter;
+use agent_broker_domain::commands::BrokerCommand;
+use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
     BrokerCapacityPolicy, ConsumerGroupId, Generation, LeaseDurationMs, LeaseEpoch, LeaseId,
-    MemberId, NamespaceId, TaskId, TaskObjective, TaskResult, TimestampMs,
+    MemberId, NamespaceId, Revision, TaskId, TaskObjective, TaskResult, Term, TimestampMs,
 };
 use agent_broker_protocol::{
     BrokerRequest, BrokerRequestDispatcher, BrokerResponse, ClaimTaskRequest, CompleteTaskRequest,
     DeclaredCapabilities, EnsureConsumerGroupRequest, EnsureNamespaceRequest,
     JoinConsumerGroupRequest, PublishTaskRequest, RequestId, SuccessPayload,
 };
-use agent_broker_runtime::{StandaloneMaintenancePolicy, StateOwnerHandle};
+use agent_broker_runtime::{
+    LeaderMaintenanceResult, StandaloneMaintenancePolicy, StateOwnerHandle,
+};
 use agent_broker_storage::{JournalCompactionPolicy, JournaledBrokerStateRepository};
 use tempfile::{TempDir, tempdir};
 
@@ -27,6 +35,33 @@ fn state_owner() -> Result<(StateOwnerHandle, TempDir), Box<dyn Error>> {
     let service = BrokerApplicationService::new(consensus, BrokerCapacityPolicy::default());
     let owner = StateOwnerHandle::spawn(BrokerRequestDispatcher::new(service), 16)?;
     Ok((owner, directory))
+}
+
+#[derive(Debug)]
+struct NonLeaderConsensus {
+    proposal_count: Arc<AtomicUsize>,
+}
+
+impl ConsensusAdapter for NonLeaderConsensus {
+    fn term(&self) -> Term {
+        Term::INITIAL
+    }
+
+    fn revision(&self) -> Revision {
+        Revision::new(0)
+    }
+
+    fn maintenance_authority(&mut self) -> Result<bool, BrokerError> {
+        Ok(false)
+    }
+
+    fn propose(&mut self, _command: BrokerCommand) -> Result<BrokerMutationResult, BrokerError> {
+        self.proposal_count.fetch_add(1, Ordering::Relaxed);
+        Err(BrokerError::new(
+            BrokerErrorCode::InternalError,
+            "non-leader maintenance attempted a proposal",
+        ))
+    }
 }
 
 fn request_id(value: &str) -> Result<RequestId, Box<dyn Error>> {
@@ -245,4 +280,23 @@ fn maintenance_policy_rejects_unbounded_or_zero_batches() {
     assert!(StandaloneMaintenancePolicy::new(0, 0, 100, 0, 1, 1, 1).is_err());
     assert!(StandaloneMaintenancePolicy::new(0, 0, 100, 1, 65, 1, 1).is_err());
     assert!(StandaloneMaintenancePolicy::new(0, 0, 100, 1, 1, 4_097, 1).is_err());
+}
+
+#[test]
+fn non_leader_maintenance_tick_skips_without_submitting_mutations() -> Result<(), Box<dyn Error>> {
+    let proposal_count = Arc::new(AtomicUsize::new(0));
+    let service = BrokerApplicationService::new(
+        NonLeaderConsensus {
+            proposal_count: Arc::clone(&proposal_count),
+        },
+        BrokerCapacityPolicy::default(),
+    );
+    let owner = StateOwnerHandle::spawn(BrokerRequestDispatcher::new(service), 4)?;
+    let policy = StandaloneMaintenancePolicy::new(1_000, 1_000, 100, 1, 1, 1, 1)?;
+
+    let result = owner.run_leader_maintenance(policy, TimestampMs::new(10_000))?;
+
+    assert_eq!(result, LeaderMaintenanceResult::SkippedNotLeader);
+    assert_eq!(proposal_count.load(Ordering::Relaxed), 0);
+    Ok(())
 }

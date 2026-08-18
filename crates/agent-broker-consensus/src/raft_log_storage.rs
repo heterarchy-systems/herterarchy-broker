@@ -41,9 +41,10 @@ impl AgentBrokerRaftLogStorage {
         let bytes = spawn_blocking_io(move || persistence.read_meta(key))
             .await
             .map_err(read_storage_error)?;
-        bytes
-            .map(|bytes| serde_json::from_slice(&bytes).map_err(read_storage_error))
-            .transpose()
+        let decoded = bytes
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose();
+        decoded.map_err(read_storage_error)
     }
 
     async fn write_meta<T>(
@@ -78,24 +79,11 @@ impl RaftLogReader<AgentBrokerRaftTypeConfig> for AgentBrokerRaftLogStorage {
             .await
             .map_err(|error| StorageIOError::read_logs(&error))?;
 
-        encoded_entries
+        let decoded = encoded_entries
             .into_iter()
-            .map(|(stored_index, encoded)| {
-                let entry: Entry<AgentBrokerRaftTypeConfig> = serde_json::from_slice(&encoded)
-                    .map_err(|error| StorageIOError::read_logs(&error))?;
-                if entry.get_log_id().index != stored_index {
-                    return Err(StorageIOError::read_logs(&io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!(
-                            "Raft log key/index mismatch: key={stored_index}, entry={}",
-                            entry.get_log_id().index
-                        ),
-                    ))
-                    .into());
-                }
-                Ok(entry)
-            })
-            .collect()
+            .map(|(stored_index, encoded)| decode_stored_log_entry(stored_index, &encoded))
+            .collect::<io::Result<Vec<_>>>();
+        decoded.map_err(|error| StorageIOError::read_logs(&error).into())
     }
 }
 
@@ -111,30 +99,12 @@ impl RaftLogStorage<AgentBrokerRaftTypeConfig> for AgentBrokerRaftLogStorage {
         let last_present = spawn_blocking_io(move || persistence.read_last_log())
             .await
             .map_err(|error| StorageIOError::read_logs(&error))?;
-        let last_present =
-            last_present
-                .map(
-                    |(stored_index, encoded)| -> Result<
-                        LogId<AgentBrokerRaftNodeId>,
-                        StorageError<AgentBrokerRaftNodeId>,
-                    > {
-                        let entry: Entry<AgentBrokerRaftTypeConfig> =
-                            serde_json::from_slice(&encoded).map_err(|error| {
-                                StorageIOError::<AgentBrokerRaftNodeId>::read_logs(&error)
-                            })?;
-                        if entry.get_log_id().index != stored_index {
-                            return Err(StorageIOError::<AgentBrokerRaftNodeId>::read_logs(
-                                &io::Error::new(
-                                    io::ErrorKind::InvalidData,
-                                    "Raft log key/index mismatch in last entry",
-                                ),
-                            )
-                            .into());
-                        }
-                        Ok(*entry.get_log_id())
-                    },
-                )
-                .transpose()?;
+        let last_present = last_present
+            .map(|(stored_index, encoded)| {
+                decode_stored_log_entry(stored_index, &encoded).map(|entry| *entry.get_log_id())
+            })
+            .transpose()
+            .map_err(|error| StorageIOError::read_logs(&error))?;
 
         Ok(LogState {
             last_purged_log_id: last_purged,
@@ -166,12 +136,10 @@ impl RaftLogStorage<AgentBrokerRaftTypeConfig> for AgentBrokerRaftLogStorage {
         let encoded = spawn_blocking_io(move || persistence.read_meta(VOTE_KEY))
             .await
             .map_err(|error| StorageIOError::read_vote(&error))?;
-        encoded
-            .map(|encoded| {
-                serde_json::from_slice(&encoded)
-                    .map_err(|error| StorageIOError::read_vote(&error).into())
-            })
-            .transpose()
+        let decoded = encoded
+            .map(|encoded| serde_json::from_slice(&encoded))
+            .transpose();
+        decoded.map_err(|error| StorageIOError::read_vote(&error).into())
     }
 
     async fn save_committed(
@@ -293,6 +261,24 @@ where
         return Ok(None);
     }
     Ok(Some((start, end_exclusive)))
+}
+
+fn decode_stored_log_entry(
+    stored_index: u64,
+    encoded: &[u8],
+) -> io::Result<Entry<AgentBrokerRaftTypeConfig>> {
+    let entry: Entry<AgentBrokerRaftTypeConfig> = serde_json::from_slice(encoded)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if entry.get_log_id().index != stored_index {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Raft log key/index mismatch: key={stored_index}, entry={}",
+                entry.get_log_id().index
+            ),
+        ));
+    }
+    Ok(entry)
 }
 
 fn read_storage_error(

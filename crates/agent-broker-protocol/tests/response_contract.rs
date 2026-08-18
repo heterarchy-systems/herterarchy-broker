@@ -1,6 +1,8 @@
 use std::error::Error;
 
-use agent_broker_application::{BrokerError, BrokerErrorCode, BrokerHealth};
+use agent_broker_application::{
+    BrokerError, BrokerErrorCode, BrokerErrorDisposition, BrokerHealth,
+};
 use agent_broker_domain::results::{MutationMetadata, TaskClaimResult};
 use agent_broker_domain::{Generation, Revision, Term};
 use agent_broker_protocol::{
@@ -89,6 +91,7 @@ fn broker_error_maps_to_stable_protocol_error_payload() -> Result<(), Box<dyn Er
         ErrorPayload {
             code: BrokerErrorCode::StaleFence,
             message: "stale lease".to_owned(),
+            disposition: BrokerErrorDisposition::Unknown,
         }
     );
     assert_eq!(error.code.as_str(), "STALE_FENCE");

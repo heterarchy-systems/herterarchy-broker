@@ -20,11 +20,14 @@ license = "MIT OR Apache-2.0"
 clap = { version = "4.6.6", features = ["derive"] }
 openraft = { version = "0.9.25", default-features = false, features = ["generic-snapshot-data", "serde", "single-term-leader", "storage-v2"] }
 redb = "4.1.0"
+rustls = { version = "0.23.42", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2.2.0"
 rustix = { version = "1.1.4", features = ["fs"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+rcgen = "0.14.8"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

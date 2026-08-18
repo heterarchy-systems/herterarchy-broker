@@ -6,10 +6,21 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+async = ["dep:tokio"]
+
 [dependencies]
 agent-broker-application = { path = "../agent-broker-application" }
 agent-broker-domain = { path = "../agent-broker-domain" }
 agent-broker-protocol = { path = "../agent-broker-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, optional = true, features = ["io-util", "net"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+rustix.workspace = true
 
 [lints]
 workspace = true

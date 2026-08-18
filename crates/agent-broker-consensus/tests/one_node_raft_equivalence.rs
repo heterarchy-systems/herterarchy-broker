@@ -99,6 +99,43 @@ fn one_node_raft_snapshot_restart_recovers_state_and_fences_old_term() -> Result
     let config = OneNodeRaftConfig::new(&raft_path).with_snapshot_log_interval(4)?;
 
     let mut raft = OneNodeRaftConsensusAdapter::open(config.clone())?;
+    let fixture = prepare_restart_fixture(&mut raft)?;
+
+    let before_snapshot = raft.progress()?;
+    let snapshotted = raft.trigger_snapshot()?;
+    assert_eq!(snapshotted.remote_attempt_count, 0);
+    assert_eq!(snapshotted.applied_index, snapshotted.committed_index);
+    assert!(snapshotted.broker_revision >= before_snapshot.broker_revision);
+    raft.shutdown()?;
+
+    let mut restarted = OneNodeRaftConsensusAdapter::open(config)?;
+    let recovered = restarted.progress()?;
+    assert_eq!(recovered.current_leader, Some(1));
+    assert_eq!(recovered.remote_attempt_count, 0);
+    assert_eq!(recovered.broker_term, restarted.term());
+    assert_eq!(recovered.broker_revision, restarted.revision());
+    assert_eq!(recovered.applied_index, recovered.committed_index);
+    assert!(restarted.revision() >= snapshotted.broker_revision);
+
+    verify_restarted_lease_lifecycle(&mut restarted, &fixture)?;
+
+    restarted.shutdown()?;
+    Ok(())
+}
+
+struct RestartFixture {
+    initial_term: Term,
+    task_id: TaskId,
+    group_id: ConsumerGroupId,
+    member_id: MemberId,
+    lease_id: LeaseId,
+    generation: Generation,
+    lease_epoch: LeaseEpoch,
+}
+
+fn prepare_restart_fixture(
+    raft: &mut OneNodeRaftConsensusAdapter,
+) -> Result<RestartFixture, Box<dyn Error>> {
     let initial_term = raft.term();
     let namespace_id = NamespaceId::new("project-restart")?;
     let task_id = TaskId::new("task-before-restart")?;
@@ -119,7 +156,7 @@ fn one_node_raft_snapshot_restart_recovers_state_and_fences_old_term() -> Result
     }))?;
     raft.propose(BrokerCommand::EnsureConsumerGroup(
         EnsureConsumerGroupCommand {
-            namespace_id: namespace_id.clone(),
+            namespace_id,
             group_id: group_id.clone(),
             max_namespace_groups: 64,
         },
@@ -151,36 +188,41 @@ fn one_node_raft_snapshot_restart_recovers_state_and_fences_old_term() -> Result
         other => return Err(format!("unexpected claim result: {other:?}").into()),
     };
 
-    let before_snapshot = raft.progress()?;
-    let snapshotted = raft.trigger_snapshot()?;
-    assert_eq!(snapshotted.remote_attempt_count, 0);
-    assert_eq!(snapshotted.applied_index, snapshotted.committed_index);
-    assert!(snapshotted.broker_revision >= before_snapshot.broker_revision);
-    raft.shutdown()?;
+    Ok(RestartFixture {
+        initial_term,
+        task_id,
+        group_id,
+        member_id,
+        lease_id,
+        generation,
+        lease_epoch,
+    })
+}
 
-    let mut restarted = OneNodeRaftConsensusAdapter::open(config)?;
-    let recovered = restarted.progress()?;
-    assert_eq!(recovered.current_leader, Some(1));
-    assert_eq!(recovered.remote_attempt_count, 0);
-    assert_eq!(recovered.broker_term, restarted.term());
-    assert_eq!(recovered.broker_revision, restarted.revision());
-    assert_eq!(recovered.applied_index, recovered.committed_index);
-    assert!(restarted.revision() >= snapshotted.broker_revision);
-
-    if restarted.term() != initial_term {
+fn verify_restarted_lease_lifecycle(
+    restarted: &mut OneNodeRaftConsensusAdapter,
+    fixture: &RestartFixture,
+) -> Result<(), Box<dyn Error>> {
+    if restarted.term() != fixture.initial_term {
         let stale = restarted.propose(BrokerCommand::RenewTaskLease(RenewTaskLeaseCommand {
-            task_id: task_id.clone(),
-            group_id: group_id.clone(),
-            member_id: member_id.clone(),
-            expected_term: initial_term,
-            expected_generation: generation,
-            expected_lease_epoch: lease_epoch,
-            lease_id: lease_id.clone(),
+            task_id: fixture.task_id.clone(),
+            group_id: fixture.group_id.clone(),
+            member_id: fixture.member_id.clone(),
+            expected_term: fixture.initial_term,
+            expected_generation: fixture.generation,
+            expected_lease_epoch: fixture.lease_epoch,
+            lease_id: fixture.lease_id.clone(),
             now_ms: TimestampMs::new(1_300),
             lease_duration_ms: 30_000,
         }));
-        let stale =
-            stale.expect_err("old Raft/Broker term must be fenced after a new election term");
+        let stale = match stale {
+            Err(error) => error,
+            Ok(result) => {
+                return Err(
+                    format!("old Raft/Broker term unexpectedly renewed lease: {result:?}").into(),
+                );
+            }
+        };
         assert_eq!(
             stale.code(),
             agent_broker_application::BrokerErrorCode::StaleFence
@@ -188,33 +230,33 @@ fn one_node_raft_snapshot_restart_recovers_state_and_fences_old_term() -> Result
     }
 
     let renewed = restarted.propose(BrokerCommand::RenewTaskLease(RenewTaskLeaseCommand {
-        task_id: task_id.clone(),
-        group_id: group_id.clone(),
-        member_id: member_id.clone(),
+        task_id: fixture.task_id.clone(),
+        group_id: fixture.group_id.clone(),
+        member_id: fixture.member_id.clone(),
         expected_term: restarted.term(),
-        expected_generation: generation,
-        expected_lease_epoch: lease_epoch,
-        lease_id: lease_id.clone(),
+        expected_generation: fixture.generation,
+        expected_lease_epoch: fixture.lease_epoch,
+        lease_id: fixture.lease_id.clone(),
         now_ms: TimestampMs::new(1_300),
         lease_duration_ms: 30_000,
     }))?;
     let renewed_epoch = match renewed {
         BrokerMutationResult::TaskLeaseRenewed(result) => {
-            assert_eq!(result.task_id, task_id);
+            assert_eq!(&result.task_id, &fixture.task_id);
             result.lease_epoch
         }
         other => return Err(format!("unexpected renewed result: {other:?}").into()),
     };
-    assert_eq!(renewed_epoch, lease_epoch);
+    assert_eq!(renewed_epoch, fixture.lease_epoch);
 
     let completed = restarted.propose(BrokerCommand::CompleteTask(CompleteTaskCommand {
-        task_id: TaskId::new("task-before-restart")?,
-        group_id,
-        member_id,
+        task_id: fixture.task_id.clone(),
+        group_id: fixture.group_id.clone(),
+        member_id: fixture.member_id.clone(),
         expected_term: restarted.term(),
-        expected_generation: generation,
-        expected_lease_epoch: lease_epoch,
-        lease_id,
+        expected_generation: fixture.generation,
+        expected_lease_epoch: fixture.lease_epoch,
+        lease_id: fixture.lease_id.clone(),
         result: TaskResult::new("recovered and completed")?,
         completed_at_ms: TimestampMs::new(1_400),
     }))?;
@@ -225,7 +267,6 @@ fn one_node_raft_snapshot_restart_recovers_state_and_fences_old_term() -> Result
         other => return Err(format!("unexpected completion result: {other:?}").into()),
     }
 
-    restarted.shutdown()?;
     Ok(())
 }
 
@@ -341,7 +382,7 @@ fn one_node_raft_process_child() -> Result<(), Box<dyn Error>> {
     ready_file.sync_all()?;
 
     loop {
-        thread::park_timeout(Duration::from_secs(60));
+        thread::park_timeout(Duration::from_mins(1));
     }
 }
 

@@ -1,0 +1,13 @@
+.git
+.github
+.chatgpt2codex
+.agents
+target
+build
+fuzz
+compatibility
+.DS_Store
+**/.DS_Store
+*.md
+.env
+.env.*

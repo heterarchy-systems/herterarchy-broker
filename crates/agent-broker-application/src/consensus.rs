@@ -2,7 +2,10 @@ use agent_broker_domain::commands::BrokerCommand;
 use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{Revision, Term};
 
-use crate::BrokerError;
+use crate::{
+    BrokerError, BrokerErrorCode, CommandIdentity, CommandSessionId, SessionOwnerEpoch,
+    SessionOwnerInstanceId,
+};
 
 /// Provider-neutral proposal boundary between Broker application use cases and consensus/storage.
 ///
@@ -15,6 +18,19 @@ pub trait ConsensusAdapter {
     /// Return the current committed Broker revision.
     fn revision(&self) -> Revision;
 
+    /// Return whether this adapter currently owns authority to initiate maintenance mutations.
+    ///
+    /// Standalone and one-node adapters are always authoritative. Replicated adapters must override
+    /// this method and derive the answer from consensus leader state rather than local process
+    /// liveness or an application-side lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when current maintenance authority cannot be determined.
+    fn maintenance_authority(&mut self) -> Result<bool, BrokerError> {
+        Ok(true)
+    }
+
     /// Propose one deterministic Broker command and return only after it is authoritative for the
     /// adapter's durability/consensus contract.
     ///
@@ -24,4 +40,50 @@ pub trait ConsensusAdapter {
     /// proposal. An adapter must not acknowledge a mutation before its own authority contract is
     /// satisfied.
     fn propose(&mut self, command: BrokerCommand) -> Result<BrokerMutationResult, BrokerError>;
+
+    /// Propose a mutation with a stable session/sequence identity that permits safe replay after an
+    /// ambiguous transport or consensus response timeout.
+    ///
+    /// Implementations that cannot durably preserve committed response identity must reject this
+    /// path rather than silently falling back to ordinary at-least-once mutation semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when the adapter does not support durable identified proposals or
+    /// when the implementation rejects/fails the consensus mutation.
+    fn propose_identified(
+        &mut self,
+        _identity: CommandIdentity,
+        _command: BrokerCommand,
+    ) -> Result<BrokerMutationResult, BrokerError> {
+        Err(BrokerError::new(
+            BrokerErrorCode::InvalidRequest,
+            "identified consensus proposals are not supported by this adapter",
+        ))
+    }
+
+    /// Acquire the broker-authoritative owner incarnation for one command session.
+    ///
+    /// A missing session may be bootstrapped only at owner epoch 1. For an existing session,
+    /// `expected_owner_epoch` must match the committed epoch. A larger client-supplied epoch is not
+    /// itself authority to take ownership; the transition must be durably committed by consensus.
+    /// Retrying the same acquisition with the same owner-instance identity after response loss must
+    /// return the already committed epoch instead of incrementing it again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError`] when durable session ownership is unsupported, the bootstrap/current
+    /// expected epoch is stale, session capacity is exhausted, or the transition fails
+    /// consensus/persistence.
+    fn acquire_command_session_owner(
+        &mut self,
+        _session_id: CommandSessionId,
+        _expected_owner_epoch: SessionOwnerEpoch,
+        _owner_instance_id: SessionOwnerInstanceId,
+    ) -> Result<SessionOwnerEpoch, BrokerError> {
+        Err(BrokerError::new(
+            BrokerErrorCode::InvalidRequest,
+            "command-session owner acquisition is not supported by this adapter",
+        ))
+    }
 }

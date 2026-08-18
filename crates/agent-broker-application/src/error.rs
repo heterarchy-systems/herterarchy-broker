@@ -13,7 +13,32 @@ pub enum BrokerErrorCode {
     StaleFence,
     PersistenceError,
     TransportError,
+    CommitOutcomeUnknown,
     InternalError,
+}
+
+/// Whether a client-visible mutation error is a committed command outcome, a definitive
+/// pre-application rejection, or still ambiguous.
+///
+/// Protocol-v1/v2 intentionally ignore this metadata. Newer owner-aware protocol generations may
+/// use it to decide whether a durable local command sequence can advance safely.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default)]
+pub enum BrokerErrorDisposition {
+    Committed,
+    Rejected,
+    #[default]
+    Unknown,
+}
+
+impl BrokerErrorDisposition {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Committed => "COMMITTED",
+            Self::Rejected => "REJECTED",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
 }
 
 impl BrokerErrorCode {
@@ -28,6 +53,7 @@ impl BrokerErrorCode {
             Self::StaleFence => "STALE_FENCE",
             Self::PersistenceError => "PERSISTENCE_ERROR",
             Self::TransportError => "TRANSPORT_ERROR",
+            Self::CommitOutcomeUnknown => "COMMIT_OUTCOME_UNKNOWN",
             Self::InternalError => "INTERNAL_ERROR",
         }
     }
@@ -38,6 +64,7 @@ impl BrokerErrorCode {
 pub struct BrokerError {
     code: BrokerErrorCode,
     message: String,
+    disposition: BrokerErrorDisposition,
 }
 
 impl BrokerError {
@@ -47,7 +74,15 @@ impl BrokerError {
         Self {
             code,
             message: message.into(),
+            disposition: BrokerErrorDisposition::Unknown,
         }
+    }
+
+    /// Attach commit-aware disposition without changing the stable error code/message contract.
+    #[must_use]
+    pub fn with_disposition(mut self, disposition: BrokerErrorDisposition) -> Self {
+        self.disposition = disposition;
+        self
     }
 
     /// Return the typed stable error code.
@@ -60,6 +95,13 @@ impl BrokerError {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Return whether this error is authoritative, definitively rejected before command outcome
+    /// storage, or still ambiguous.
+    #[must_use]
+    pub const fn disposition(&self) -> BrokerErrorDisposition {
+        self.disposition
     }
 }
 
@@ -135,7 +177,7 @@ mod tests {
         TaskId, TaskTransitionError,
     };
 
-    use super::{BrokerError, BrokerErrorCode};
+    use super::{BrokerError, BrokerErrorCode, BrokerErrorDisposition};
 
     #[test]
     fn stable_codes_match_python_reference_strings() {
@@ -152,7 +194,18 @@ mod tests {
             "PERSISTENCE_ERROR"
         );
         assert_eq!(BrokerErrorCode::TransportError.as_str(), "TRANSPORT_ERROR");
+        assert_eq!(
+            BrokerErrorCode::CommitOutcomeUnknown.as_str(),
+            "COMMIT_OUTCOME_UNKNOWN"
+        );
         assert_eq!(BrokerErrorCode::InternalError.as_str(), "INTERNAL_ERROR");
+        assert_eq!(BrokerErrorDisposition::Committed.as_str(), "COMMITTED");
+        assert_eq!(BrokerErrorDisposition::Rejected.as_str(), "REJECTED");
+        assert_eq!(BrokerErrorDisposition::Unknown.as_str(), "UNKNOWN");
+        assert_eq!(
+            BrokerError::new(BrokerErrorCode::Conflict, "conflict").disposition(),
+            BrokerErrorDisposition::Unknown
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use agent_broker_application::BrokerErrorCode;
+use agent_broker_application::{BrokerErrorCode, BrokerErrorDisposition};
 use agent_broker_domain::{
     ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId,
     TaskObjective, TaskStatus, Term, TimestampMs,
@@ -37,6 +37,7 @@ fn reference_responses() -> Result<Vec<BrokerResponse>, Box<dyn Error>> {
         error: ErrorPayload {
             code: BrokerErrorCode::StaleFence,
             message: "stale lease".to_owned(),
+            disposition: BrokerErrorDisposition::Unknown,
         },
     });
     Ok(responses)
@@ -211,6 +212,7 @@ fn codec_enforces_request_response_bounds() -> Result<(), Box<dyn Error>> {
         error: ErrorPayload {
             code: BrokerErrorCode::InvalidRequest,
             message: "x".repeat(MAX_ERROR_MESSAGE_BYTES + 1),
+            disposition: BrokerErrorDisposition::Unknown,
         },
     };
     assert!(matches!(

@@ -653,6 +653,7 @@ fn parse_error_code(value: &str) -> Result<BrokerErrorCode, ProtocolCodecError> 
         "STALE_FENCE" => Ok(BrokerErrorCode::StaleFence),
         "PERSISTENCE_ERROR" => Ok(BrokerErrorCode::PersistenceError),
         "TRANSPORT_ERROR" => Ok(BrokerErrorCode::TransportError),
+        "COMMIT_OUTCOME_UNKNOWN" => Ok(BrokerErrorCode::CommitOutcomeUnknown),
         "INTERNAL_ERROR" => Ok(BrokerErrorCode::InternalError),
         _ => Err(invalid_request(format!(
             "Unknown Broker error code {value:?}."
@@ -1173,6 +1174,9 @@ fn success_payload(payload: &SuccessPayload) -> Result<Value, ProtocolCodecError
         )),
         claimed @ SuccessPayload::TaskClaimed { .. } => claimed_success_from_payload(claimed),
         renewed @ SuccessPayload::TaskLeaseRenewed { .. } => renewed_success_from_payload(renewed),
+        SuccessPayload::SessionOwnerAcquired { .. } => Err(ProtocolCodecError::InvalidRequest(
+            "command-session owner acquisition is not a protocol-v1 response".to_owned(),
+        )),
     }
 }
 

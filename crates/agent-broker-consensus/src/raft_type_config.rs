@@ -1,11 +1,11 @@
 use std::io::Cursor;
 
-use crate::{ReplicatedBrokerCommandV1, ReplicatedBrokerResponseV1};
+use crate::{ReplicatedBrokerProposalV1, ReplicatedBrokerResponseV1};
 
 openraft::declare_raft_types!(
     /// OpenRaft type boundary for the Agent Broker replicated consensus path.
     pub AgentBrokerRaftTypeConfig:
-        D = ReplicatedBrokerCommandV1,
+        D = ReplicatedBrokerProposalV1,
         R = ReplicatedBrokerResponseV1,
         NodeId = u64,
         Node = openraft::BasicNode,

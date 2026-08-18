@@ -141,6 +141,15 @@ pub struct StandaloneMaintenanceResult {
     pub reaped_stale_members: usize,
 }
 
+/// Outcome of one replicated maintenance tick after checking consensus authority.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum LeaderMaintenanceResult {
+    /// This node was not the active consensus leader when the tick began.
+    SkippedNotLeader,
+    /// This node was leader and submitted the bounded maintenance work through consensus.
+    Applied(StandaloneMaintenanceResult),
+}
+
 /// Maintenance submission failure from either runtime ownership or Broker consensus/application.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum MaintenanceRunError {
@@ -221,10 +230,74 @@ where
     })
 }
 
+pub(crate) fn run_once_if_authoritative<C>(
+    dispatcher: &mut BrokerRequestDispatcher<C>,
+    policy: StandaloneMaintenancePolicy,
+    now_ms: TimestampMs,
+) -> Result<LeaderMaintenanceResult, BrokerError>
+where
+    C: ConsensusAdapter,
+{
+    if !dispatcher
+        .application_service_mut()
+        .maintenance_authority()?
+    {
+        return Ok(LeaderMaintenanceResult::SkippedNotLeader);
+    }
+    run_once(dispatcher, policy, now_ms).map(LeaderMaintenanceResult::Applied)
+}
+
 /// Periodic standalone maintenance thread. Future Raft mode must only run this on the leader.
 pub struct StandaloneMaintenanceRunner {
     state_owner: StateOwnerHandle,
     policy: StandaloneMaintenancePolicy,
+}
+
+/// Periodic maintenance runner for replicated mode. Every process may own a timer thread, but only
+/// the active consensus leader is allowed to submit maintenance mutations.
+pub struct LeaderMaintenanceRunner {
+    state_owner: StateOwnerHandle,
+    policy: StandaloneMaintenancePolicy,
+}
+
+impl LeaderMaintenanceRunner {
+    #[must_use]
+    pub const fn new(state_owner: StateOwnerHandle, policy: StandaloneMaintenancePolicy) -> Self {
+        Self {
+            state_owner,
+            policy,
+        }
+    }
+
+    /// Spawn periodic leader-gated maintenance until `stop` becomes true.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] if the maintenance thread cannot be created.
+    pub fn spawn(self, stop: Arc<AtomicBool>) -> Result<thread::JoinHandle<()>, RuntimeError> {
+        thread::Builder::new()
+            .name("agent-broker-leader-maintenance".to_owned())
+            .spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    match system_clock_ms() {
+                        Ok(now_ms) => {
+                            if let Err(error) =
+                                self.state_owner.run_leader_maintenance(self.policy, now_ms)
+                            {
+                                eprintln!("agentbrokerd leader maintenance failed: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("agentbrokerd leader maintenance clock failed: {error}");
+                        }
+                    }
+                    thread::sleep(self.policy.interval());
+                }
+            })
+            .map_err(|error| {
+                RuntimeError::io("Broker leader maintenance thread spawn failed", error)
+            })
+    }
 }
 
 impl StandaloneMaintenanceRunner {

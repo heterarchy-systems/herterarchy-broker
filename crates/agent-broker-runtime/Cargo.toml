@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 agent-broker-application = { path = "../agent-broker-application" }
+agent-broker-client = { path = "../agent-broker-client" }
 agent-broker-consensus = { path = "../agent-broker-consensus" }
 agent-broker-domain = { path = "../agent-broker-domain" }
 agent-broker-protocol = { path = "../agent-broker-protocol" }
@@ -19,8 +20,10 @@ serde_json.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
-agent-broker-client = { path = "../agent-broker-client" }
+agent-broker-client = { path = "../agent-broker-client", features = ["async"] }
+rcgen.workspace = true
 tempfile.workspace = true
+tokio.workspace = true
 
 [[bin]]
 name = "agentbrokerd"

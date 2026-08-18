@@ -98,6 +98,224 @@ pub enum ReplicatedBrokerCommandV1 {
         expected_term: u64,
         new_term: u64,
     },
+    AcquireCommandSessionOwner {
+        session_id: String,
+        expected_owner_epoch: u64,
+        owner_instance_id: String,
+    },
+}
+
+impl ReplicatedBrokerCommandV1 {
+    /// Compare only caller-stable semantic request content for identified-command retry matching.
+    ///
+    /// Server-observed timestamps and server-local capacity limits are intentionally excluded: the
+    /// first committed command keeps those authoritative values, while a later exact wire retry may
+    /// be observed at another time or after a policy reload without becoming a different logical
+    /// client command.
+    #[must_use]
+    pub fn same_identified_request(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::EnsureNamespace { namespace_id, .. },
+                Self::EnsureNamespace {
+                    namespace_id: other_namespace_id,
+                    ..
+                },
+            ) => namespace_id == other_namespace_id,
+            (
+                Self::PublishTask {
+                    namespace_id,
+                    task_id,
+                    objective,
+                    ..
+                },
+                Self::PublishTask {
+                    namespace_id: other_namespace_id,
+                    task_id: other_task_id,
+                    objective: other_objective,
+                    ..
+                },
+            ) => {
+                namespace_id == other_namespace_id
+                    && task_id == other_task_id
+                    && objective == other_objective
+            }
+            (
+                Self::EnsureConsumerGroup {
+                    namespace_id,
+                    group_id,
+                    ..
+                },
+                Self::EnsureConsumerGroup {
+                    namespace_id: other_namespace_id,
+                    group_id: other_group_id,
+                    ..
+                },
+            ) => namespace_id == other_namespace_id && group_id == other_group_id,
+            (
+                Self::JoinConsumerGroup {
+                    group_id,
+                    member_id,
+                    capabilities,
+                    ..
+                },
+                Self::JoinConsumerGroup {
+                    group_id: other_group_id,
+                    member_id: other_member_id,
+                    capabilities: other_capabilities,
+                    ..
+                },
+            ) => {
+                group_id == other_group_id
+                    && member_id == other_member_id
+                    && capabilities == other_capabilities
+            }
+            (
+                Self::Heartbeat {
+                    group_id,
+                    member_id,
+                    expected_generation,
+                    ..
+                },
+                Self::Heartbeat {
+                    group_id: other_group_id,
+                    member_id: other_member_id,
+                    expected_generation: other_expected_generation,
+                    ..
+                },
+            ) => {
+                group_id == other_group_id
+                    && member_id == other_member_id
+                    && expected_generation == other_expected_generation
+            }
+            (Self::LeaveConsumerGroup { .. }, Self::LeaveConsumerGroup { .. })
+            | (Self::ReapStaleMembers { .. }, Self::ReapStaleMembers { .. })
+            | (Self::PruneCompletedTasks { .. }, Self::PruneCompletedTasks { .. })
+            | (Self::AdvanceTerm { .. }, Self::AdvanceTerm { .. })
+            | (Self::AcquireCommandSessionOwner { .. }, Self::AcquireCommandSessionOwner { .. }) => {
+                self == other
+            }
+            (Self::ClaimTask { .. }, Self::ClaimTask { .. }) => same_claim_request(self, other),
+            (Self::RenewTaskLease { .. }, Self::RenewTaskLease { .. }) => {
+                same_renew_request(self, other)
+            }
+            (Self::CompleteTask { .. }, Self::CompleteTask { .. }) => {
+                same_complete_request(self, other)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn same_claim_request(left: &ReplicatedBrokerCommandV1, right: &ReplicatedBrokerCommandV1) -> bool {
+    let (
+        ReplicatedBrokerCommandV1::ClaimTask {
+            group_id,
+            member_id,
+            expected_term,
+            expected_generation,
+            lease_id,
+            lease_duration_ms,
+            ..
+        },
+        ReplicatedBrokerCommandV1::ClaimTask {
+            group_id: other_group_id,
+            member_id: other_member_id,
+            expected_term: other_expected_term,
+            expected_generation: other_expected_generation,
+            lease_id: other_lease_id,
+            lease_duration_ms: other_lease_duration_ms,
+            ..
+        },
+    ) = (left, right)
+    else {
+        return false;
+    };
+    group_id == other_group_id
+        && member_id == other_member_id
+        && expected_term == other_expected_term
+        && expected_generation == other_expected_generation
+        && lease_id == other_lease_id
+        && lease_duration_ms == other_lease_duration_ms
+}
+
+fn same_renew_request(left: &ReplicatedBrokerCommandV1, right: &ReplicatedBrokerCommandV1) -> bool {
+    let (
+        ReplicatedBrokerCommandV1::RenewTaskLease {
+            task_id,
+            group_id,
+            member_id,
+            expected_term,
+            expected_generation,
+            expected_lease_epoch,
+            lease_id,
+            lease_duration_ms,
+            ..
+        },
+        ReplicatedBrokerCommandV1::RenewTaskLease {
+            task_id: other_task_id,
+            group_id: other_group_id,
+            member_id: other_member_id,
+            expected_term: other_expected_term,
+            expected_generation: other_expected_generation,
+            expected_lease_epoch: other_expected_lease_epoch,
+            lease_id: other_lease_id,
+            lease_duration_ms: other_lease_duration_ms,
+            ..
+        },
+    ) = (left, right)
+    else {
+        return false;
+    };
+    task_id == other_task_id
+        && group_id == other_group_id
+        && member_id == other_member_id
+        && expected_term == other_expected_term
+        && expected_generation == other_expected_generation
+        && expected_lease_epoch == other_expected_lease_epoch
+        && lease_id == other_lease_id
+        && lease_duration_ms == other_lease_duration_ms
+}
+
+fn same_complete_request(
+    left: &ReplicatedBrokerCommandV1,
+    right: &ReplicatedBrokerCommandV1,
+) -> bool {
+    let (
+        ReplicatedBrokerCommandV1::CompleteTask {
+            task_id,
+            group_id,
+            member_id,
+            expected_term,
+            expected_generation,
+            expected_lease_epoch,
+            lease_id,
+            result,
+            ..
+        },
+        ReplicatedBrokerCommandV1::CompleteTask {
+            task_id: other_task_id,
+            group_id: other_group_id,
+            member_id: other_member_id,
+            expected_term: other_expected_term,
+            expected_generation: other_expected_generation,
+            expected_lease_epoch: other_expected_lease_epoch,
+            lease_id: other_lease_id,
+            result: other_result,
+            ..
+        },
+    ) = (left, right)
+    else {
+        return false;
+    };
+    task_id == other_task_id
+        && group_id == other_group_id
+        && member_id == other_member_id
+        && expected_term == other_expected_term
+        && expected_generation == other_expected_generation
+        && expected_lease_epoch == other_expected_lease_epoch
+        && lease_id == other_lease_id
+        && result == other_result
 }
 
 impl TryFrom<BrokerCommand> for ReplicatedBrokerCommandV1 {
@@ -202,75 +420,15 @@ impl TryFrom<ReplicatedBrokerCommandV1> for BrokerCommand {
 
     fn try_from(command: ReplicatedBrokerCommandV1) -> Result<Self, Self::Error> {
         match command {
-            ReplicatedBrokerCommandV1::EnsureNamespace {
-                namespace_id,
-                max_namespaces,
-            } => Ok(Self::EnsureNamespace(EnsureNamespaceCommand {
-                namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
-                max_namespaces: u64_to_usize(max_namespaces, "max_namespaces")?,
-            })),
-            ReplicatedBrokerCommandV1::PublishTask {
-                namespace_id,
-                task_id,
-                objective,
-                created_at_ms,
-                max_namespace_tasks,
-            } => Ok(Self::PublishTask(PublishTaskCommand {
-                namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
-                task_id: TaskId::new(task_id).map_err(validation_error)?,
-                objective: TaskObjective::new(objective).map_err(validation_error)?,
-                created_at_ms: TimestampMs::new(created_at_ms),
-                max_namespace_tasks: u64_to_usize(max_namespace_tasks, "max_namespace_tasks")?,
-            })),
-            ReplicatedBrokerCommandV1::EnsureConsumerGroup {
-                namespace_id,
-                group_id,
-                max_namespace_groups,
-            } => Ok(Self::EnsureConsumerGroup(EnsureConsumerGroupCommand {
-                namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
-                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                max_namespace_groups: u64_to_usize(max_namespace_groups, "max_namespace_groups")?,
-            })),
-            ReplicatedBrokerCommandV1::JoinConsumerGroup {
-                group_id,
-                member_id,
-                capabilities,
-                now_ms,
-                max_group_members,
-            } => Ok(Self::JoinConsumerGroup(JoinConsumerGroupCommand {
-                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
-                capabilities: Capabilities::new(capabilities).map_err(validation_error)?,
-                now_ms: TimestampMs::new(now_ms),
-                max_group_members: u64_to_usize(max_group_members, "max_group_members")?,
-            })),
-            ReplicatedBrokerCommandV1::Heartbeat {
-                group_id,
-                member_id,
-                expected_generation,
-                now_ms,
-            } => Ok(Self::Heartbeat(HeartbeatCommand {
-                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
-                expected_generation: Generation::new(expected_generation),
-                now_ms: TimestampMs::new(now_ms),
-            })),
-            ReplicatedBrokerCommandV1::LeaveConsumerGroup {
-                group_id,
-                member_id,
-                expected_generation,
-            } => Ok(Self::LeaveConsumerGroup(LeaveConsumerGroupCommand {
-                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
-                member_id: MemberId::new(member_id).map_err(validation_error)?,
-                expected_generation: Generation::new(expected_generation),
-            })),
-            ReplicatedBrokerCommandV1::ReapStaleMembers {
-                stale_before_ms,
-                max_members,
-            } => Ok(Self::ReapStaleMembers(ReapStaleMembersCommand {
-                stale_before_ms: TimestampMs::new(stale_before_ms),
-                max_members: u64_to_usize(max_members, "max_members")?,
-            })),
+            command @ (ReplicatedBrokerCommandV1::EnsureNamespace { .. }
+            | ReplicatedBrokerCommandV1::PublishTask { .. }
+            | ReplicatedBrokerCommandV1::EnsureConsumerGroup { .. }
+            | ReplicatedBrokerCommandV1::JoinConsumerGroup { .. }
+            | ReplicatedBrokerCommandV1::Heartbeat { .. }
+            | ReplicatedBrokerCommandV1::LeaveConsumerGroup { .. }
+            | ReplicatedBrokerCommandV1::ReapStaleMembers { .. }) => {
+                convert_coordination_command(command)
+            }
             ReplicatedBrokerCommandV1::ClaimTask {
                 group_id,
                 member_id,
@@ -344,12 +502,107 @@ impl TryFrom<ReplicatedBrokerCommandV1> for BrokerCommand {
                 expected_term: Term::new(expected_term).map_err(validation_error)?,
                 new_term: Term::new(new_term).map_err(validation_error)?,
             })),
+            ReplicatedBrokerCommandV1::AcquireCommandSessionOwner { .. } => {
+                Err(ReplicatedCommandError(
+                    "command-session owner acquisition is consensus-owned and cannot become a Broker domain command"
+                        .to_owned(),
+                ))
+            }
         }
+    }
+}
+
+fn convert_coordination_command(
+    command: ReplicatedBrokerCommandV1,
+) -> Result<BrokerCommand, ReplicatedCommandError> {
+    match command {
+        ReplicatedBrokerCommandV1::EnsureNamespace {
+            namespace_id,
+            max_namespaces,
+        } => Ok(BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {
+            namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
+            max_namespaces: u64_to_usize(max_namespaces, "max_namespaces")?,
+        })),
+        ReplicatedBrokerCommandV1::PublishTask {
+            namespace_id,
+            task_id,
+            objective,
+            created_at_ms,
+            max_namespace_tasks,
+        } => Ok(BrokerCommand::PublishTask(PublishTaskCommand {
+            namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
+            task_id: TaskId::new(task_id).map_err(validation_error)?,
+            objective: TaskObjective::new(objective).map_err(validation_error)?,
+            created_at_ms: TimestampMs::new(created_at_ms),
+            max_namespace_tasks: u64_to_usize(max_namespace_tasks, "max_namespace_tasks")?,
+        })),
+        ReplicatedBrokerCommandV1::EnsureConsumerGroup {
+            namespace_id,
+            group_id,
+            max_namespace_groups,
+        } => Ok(BrokerCommand::EnsureConsumerGroup(
+            EnsureConsumerGroupCommand {
+                namespace_id: NamespaceId::new(namespace_id).map_err(validation_error)?,
+                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
+                max_namespace_groups: u64_to_usize(max_namespace_groups, "max_namespace_groups")?,
+            },
+        )),
+        ReplicatedBrokerCommandV1::JoinConsumerGroup {
+            group_id,
+            member_id,
+            capabilities,
+            now_ms,
+            max_group_members,
+        } => Ok(BrokerCommand::JoinConsumerGroup(JoinConsumerGroupCommand {
+            group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
+            member_id: MemberId::new(member_id).map_err(validation_error)?,
+            capabilities: Capabilities::new(capabilities).map_err(validation_error)?,
+            now_ms: TimestampMs::new(now_ms),
+            max_group_members: u64_to_usize(max_group_members, "max_group_members")?,
+        })),
+        ReplicatedBrokerCommandV1::Heartbeat {
+            group_id,
+            member_id,
+            expected_generation,
+            now_ms,
+        } => Ok(BrokerCommand::Heartbeat(HeartbeatCommand {
+            group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
+            member_id: MemberId::new(member_id).map_err(validation_error)?,
+            expected_generation: Generation::new(expected_generation),
+            now_ms: TimestampMs::new(now_ms),
+        })),
+        ReplicatedBrokerCommandV1::LeaveConsumerGroup {
+            group_id,
+            member_id,
+            expected_generation,
+        } => Ok(BrokerCommand::LeaveConsumerGroup(
+            LeaveConsumerGroupCommand {
+                group_id: ConsumerGroupId::new(group_id).map_err(validation_error)?,
+                member_id: MemberId::new(member_id).map_err(validation_error)?,
+                expected_generation: Generation::new(expected_generation),
+            },
+        )),
+        ReplicatedBrokerCommandV1::ReapStaleMembers {
+            stale_before_ms,
+            max_members,
+        } => Ok(BrokerCommand::ReapStaleMembers(ReapStaleMembersCommand {
+            stale_before_ms: TimestampMs::new(stale_before_ms),
+            max_members: u64_to_usize(max_members, "max_members")?,
+        })),
+        _ => Err(ReplicatedCommandError(
+            "replicated Broker command was routed to the wrong conversion family".to_owned(),
+        )),
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ReplicatedCommandError(String);
+
+impl ReplicatedCommandError {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
 
 impl fmt::Display for ReplicatedCommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -373,4 +626,265 @@ fn usize_to_u64(value: usize, field: &'static str) -> Result<u64, ReplicatedComm
 fn u64_to_usize(value: u64, field: &'static str) -> Result<usize, ReplicatedCommandError> {
     usize::try_from(value)
         .map_err(|_| ReplicatedCommandError(format!("{field} exceeds platform usize")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReplicatedBrokerCommandV1 as Command;
+
+    fn assert_equivalent<const N: usize>(pairs: [(Command, Command); N]) {
+        for (first, retry) in pairs {
+            assert!(first.same_identified_request(&retry));
+            assert!(retry.same_identified_request(&first));
+        }
+    }
+
+    #[test]
+    fn identified_retry_ignores_server_capacity_fields() {
+        assert_equivalent([
+            (
+                Command::EnsureNamespace {
+                    namespace_id: "ns".to_owned(),
+                    max_namespaces: 1,
+                },
+                Command::EnsureNamespace {
+                    namespace_id: "ns".to_owned(),
+                    max_namespaces: 999,
+                },
+            ),
+            (
+                Command::PublishTask {
+                    namespace_id: "ns".to_owned(),
+                    task_id: "task".to_owned(),
+                    objective: "objective".to_owned(),
+                    created_at_ms: 10,
+                    max_namespace_tasks: 1,
+                },
+                Command::PublishTask {
+                    namespace_id: "ns".to_owned(),
+                    task_id: "task".to_owned(),
+                    objective: "objective".to_owned(),
+                    created_at_ms: 10,
+                    max_namespace_tasks: 999,
+                },
+            ),
+            (
+                Command::EnsureConsumerGroup {
+                    namespace_id: "ns".to_owned(),
+                    group_id: "group".to_owned(),
+                    max_namespace_groups: 1,
+                },
+                Command::EnsureConsumerGroup {
+                    namespace_id: "ns".to_owned(),
+                    group_id: "group".to_owned(),
+                    max_namespace_groups: 999,
+                },
+            ),
+            (
+                Command::JoinConsumerGroup {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    capabilities: vec!["cap".to_owned()],
+                    now_ms: 10,
+                    max_group_members: 1,
+                },
+                Command::JoinConsumerGroup {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    capabilities: vec!["cap".to_owned()],
+                    now_ms: 10,
+                    max_group_members: 999,
+                },
+            ),
+        ]);
+    }
+
+    #[test]
+    fn identified_retry_ignores_server_observed_coordination_timestamps() {
+        assert_equivalent([
+            (
+                Command::PublishTask {
+                    namespace_id: "ns".to_owned(),
+                    task_id: "task".to_owned(),
+                    objective: "objective".to_owned(),
+                    created_at_ms: 10,
+                    max_namespace_tasks: 8,
+                },
+                Command::PublishTask {
+                    namespace_id: "ns".to_owned(),
+                    task_id: "task".to_owned(),
+                    objective: "objective".to_owned(),
+                    created_at_ms: 99,
+                    max_namespace_tasks: 8,
+                },
+            ),
+            (
+                Command::JoinConsumerGroup {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    capabilities: vec!["cap".to_owned()],
+                    now_ms: 10,
+                    max_group_members: 8,
+                },
+                Command::JoinConsumerGroup {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    capabilities: vec!["cap".to_owned()],
+                    now_ms: 99,
+                    max_group_members: 8,
+                },
+            ),
+            (
+                Command::Heartbeat {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_generation: 2,
+                    now_ms: 10,
+                },
+                Command::Heartbeat {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_generation: 2,
+                    now_ms: 99,
+                },
+            ),
+        ]);
+    }
+
+    #[test]
+    fn identified_retry_ignores_server_observed_task_timestamps() {
+        assert_equivalent([
+            (
+                Command::ClaimTask {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_term: 3,
+                    expected_generation: 2,
+                    lease_id: "lease".to_owned(),
+                    now_ms: 10,
+                    lease_duration_ms: 500,
+                },
+                Command::ClaimTask {
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_term: 3,
+                    expected_generation: 2,
+                    lease_id: "lease".to_owned(),
+                    now_ms: 99,
+                    lease_duration_ms: 500,
+                },
+            ),
+            (
+                Command::RenewTaskLease {
+                    task_id: "task".to_owned(),
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_term: 3,
+                    expected_generation: 2,
+                    expected_lease_epoch: 4,
+                    lease_id: "lease".to_owned(),
+                    now_ms: 10,
+                    lease_duration_ms: 500,
+                },
+                Command::RenewTaskLease {
+                    task_id: "task".to_owned(),
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_term: 3,
+                    expected_generation: 2,
+                    expected_lease_epoch: 4,
+                    lease_id: "lease".to_owned(),
+                    now_ms: 99,
+                    lease_duration_ms: 500,
+                },
+            ),
+            (
+                Command::CompleteTask {
+                    task_id: "task".to_owned(),
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_term: 3,
+                    expected_generation: 2,
+                    expected_lease_epoch: 4,
+                    lease_id: "lease".to_owned(),
+                    result: "done".to_owned(),
+                    completed_at_ms: 10,
+                },
+                Command::CompleteTask {
+                    task_id: "task".to_owned(),
+                    group_id: "group".to_owned(),
+                    member_id: "member".to_owned(),
+                    expected_term: 3,
+                    expected_generation: 2,
+                    expected_lease_epoch: 4,
+                    lease_id: "lease".to_owned(),
+                    result: "done".to_owned(),
+                    completed_at_ms: 99,
+                },
+            ),
+        ]);
+    }
+
+    #[test]
+    fn identified_retry_rejects_changed_client_semantics() {
+        let base = Command::PublishTask {
+            namespace_id: "ns".to_owned(),
+            task_id: "task".to_owned(),
+            objective: "objective".to_owned(),
+            created_at_ms: 10,
+            max_namespace_tasks: 1,
+        };
+        let changed = Command::PublishTask {
+            namespace_id: "ns".to_owned(),
+            task_id: "task-other".to_owned(),
+            objective: "objective".to_owned(),
+            created_at_ms: 99,
+            max_namespace_tasks: 999,
+        };
+        assert!(!base.same_identified_request(&changed));
+
+        let base = Command::ClaimTask {
+            group_id: "group".to_owned(),
+            member_id: "member".to_owned(),
+            expected_term: 3,
+            expected_generation: 2,
+            lease_id: "lease".to_owned(),
+            now_ms: 10,
+            lease_duration_ms: 500,
+        };
+        let changed = Command::ClaimTask {
+            group_id: "group".to_owned(),
+            member_id: "member".to_owned(),
+            expected_term: 3,
+            expected_generation: 2,
+            lease_id: "lease".to_owned(),
+            now_ms: 99,
+            lease_duration_ms: 501,
+        };
+        assert!(!base.same_identified_request(&changed));
+
+        let base = Command::CompleteTask {
+            task_id: "task".to_owned(),
+            group_id: "group".to_owned(),
+            member_id: "member".to_owned(),
+            expected_term: 3,
+            expected_generation: 2,
+            expected_lease_epoch: 4,
+            lease_id: "lease".to_owned(),
+            result: "done".to_owned(),
+            completed_at_ms: 10,
+        };
+        let changed = Command::CompleteTask {
+            task_id: "task".to_owned(),
+            group_id: "group".to_owned(),
+            member_id: "member".to_owned(),
+            expected_term: 3,
+            expected_generation: 2,
+            expected_lease_epoch: 4,
+            lease_id: "lease".to_owned(),
+            result: "different".to_owned(),
+            completed_at_ms: 99,
+        };
+        assert!(!base.same_identified_request(&changed));
+    }
 }

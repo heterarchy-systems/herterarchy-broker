@@ -2,19 +2,28 @@ use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use agent_broker_application::{BrokerApplicationService, BrokerErrorCode};
-use agent_broker_client::{BrokerClient, BrokerClientConfig, ClaimInput, CompleteInput};
+use agent_broker_application::{
+    BrokerApplicationService, BrokerError, BrokerErrorCode, BrokerErrorDisposition,
+    CommandSessionId, ConsensusAdapter, SessionOwnerEpoch, SessionOwnerInstanceId,
+};
+use agent_broker_client::{
+    BrokerClient, BrokerClientConfig, ClaimInput, ClientError, CompleteInput,
+};
 use agent_broker_consensus::StandaloneConsensusAdapter;
+use agent_broker_domain::commands::BrokerCommand;
+use agent_broker_domain::results::BrokerMutationResult;
 use agent_broker_domain::{
     BrokerCapacityPolicy, ConsumerGroupId, LeaseDurationMs, LeaseId, MemberId, NamespaceId, TaskId,
-    TaskObjective, TaskResult, TaskStatus,
+    TaskObjective, TaskResult, TaskStatus, Term,
 };
 use agent_broker_protocol::{BrokerRequestDispatcher, DeclaredCapabilities};
 use agent_broker_runtime::{
-    BrokerServerConfig, BrokerStateProcessLock, RuntimeError, StateOwnerHandle, TcpBrokerServer,
+    BrokerBindPolicy, BrokerServerConfig, BrokerStateProcessLock, RuntimeError, StateOwnerHandle,
+    TcpBrokerServer,
 };
 use agent_broker_storage::{JournalCompactionPolicy, JournaledBrokerStateRepository};
 use tempfile::tempdir;
@@ -23,6 +32,42 @@ struct TestServer {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
     handle: thread::JoinHandle<Result<(), RuntimeError>>,
+}
+
+struct BlockingConsensus {
+    inner: StandaloneConsensusAdapter<JournaledBrokerStateRepository>,
+    entered: SyncSender<()>,
+    release: Receiver<()>,
+    block_first: bool,
+}
+
+impl ConsensusAdapter for BlockingConsensus {
+    fn term(&self) -> Term {
+        self.inner.term()
+    }
+
+    fn revision(&self) -> agent_broker_domain::Revision {
+        self.inner.revision()
+    }
+
+    fn propose(&mut self, command: BrokerCommand) -> Result<BrokerMutationResult, BrokerError> {
+        if self.block_first {
+            self.block_first = false;
+            self.entered.send(()).map_err(|_| {
+                BrokerError::new(
+                    BrokerErrorCode::InternalError,
+                    "saturation test entry barrier disconnected",
+                )
+            })?;
+            self.release.recv().map_err(|_| {
+                BrokerError::new(
+                    BrokerErrorCode::InternalError,
+                    "saturation test release barrier disconnected",
+                )
+            })?;
+        }
+        self.inner.propose(command)
+    }
 }
 
 impl TestServer {
@@ -50,6 +95,7 @@ fn spawn_test_server(state_path: std::path::PathBuf) -> Result<TestServer, Box<d
             address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             max_frame_bytes: 128 * 1024,
             max_connections: 16,
+            connection_io_timeout: Duration::from_millis(250),
         },
         state_owner,
     )?;
@@ -66,14 +112,177 @@ fn spawn_test_server(state_path: std::path::PathBuf) -> Result<TestServer, Box<d
     })
 }
 
+fn wait_for_state_owner_load(
+    owner: &StateOwnerHandle,
+    active_jobs: usize,
+    queued_jobs: usize,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let load = owner.load();
+        if load.active_jobs == active_jobs && load.queued_jobs == queued_jobs {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "state-owner load did not reach active={active_jobs} queued={queued_jobs}; last={load:?}"
+            )
+            .into());
+        }
+        thread::yield_now();
+    }
+}
+
+fn assert_sustained_overload_rejected(
+    client: &mut BrokerClient,
+    owner: &StateOwnerHandle,
+    session_id: &CommandSessionId,
+    owner_instance_id: &SessionOwnerInstanceId,
+    attempts: usize,
+) -> Result<(), Box<dyn Error>> {
+    for _ in 0..attempts {
+        let overloaded = client.acquire_command_session_owner(
+            session_id.clone(),
+            SessionOwnerEpoch::INITIAL,
+            owner_instance_id.clone(),
+        );
+        let Err(ClientError::Broker(error)) = overloaded else {
+            return Err(format!("expected typed saturation rejection, got {overloaded:?}").into());
+        };
+        assert_eq!(error.code(), BrokerErrorCode::CapacityExceeded);
+        assert_eq!(error.disposition(), BrokerErrorDisposition::Rejected);
+        let load = owner.load();
+        assert_eq!(load.active_jobs, 1);
+        assert_eq!(load.queued_jobs, 1);
+        assert_eq!(load.capacity, 1);
+    }
+    Ok(())
+}
+
+fn join_client<T>(
+    handle: thread::JoinHandle<Result<T, ClientError>>,
+    label: &'static str,
+) -> Result<T, Box<dyn Error>> {
+    match handle.join() {
+        Ok(result) => Ok(result?),
+        Err(_) => Err(format!("{label} thread panicked").into()),
+    }
+}
+
+#[test]
+fn saturated_state_owner_rejects_v3_before_application_and_recovers_after_drain()
+-> Result<(), Box<dyn Error>> {
+    const OVERLOAD_ATTEMPTS: usize = 64;
+    let directory = tempdir()?;
+    let repository = JournaledBrokerStateRepository::new(
+        directory.path().join("saturation-state.json"),
+        None,
+        JournalCompactionPolicy::new(10_000, 64 * 1024 * 1024)?,
+    );
+    let inner = StandaloneConsensusAdapter::new(repository)?;
+    let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let service = BrokerApplicationService::new(
+        BlockingConsensus {
+            inner,
+            entered: entered_sender,
+            release: release_receiver,
+            block_first: true,
+        },
+        BrokerCapacityPolicy::default(),
+    );
+    let owner = StateOwnerHandle::spawn(BrokerRequestDispatcher::new(service), 1)?;
+    let server = TcpBrokerServer::bind(
+        BrokerServerConfig {
+            address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            max_frame_bytes: 128 * 1024,
+            max_connections: 8,
+            connection_io_timeout: Duration::from_secs(2),
+        },
+        owner.clone(),
+    )?;
+    let address = server.local_addr()?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let server_stop = Arc::clone(&stop);
+    let server_thread = thread::Builder::new()
+        .name("agent-broker-saturation-server".to_owned())
+        .spawn(move || server.serve_until(server_stop.as_ref()))?;
+
+    let first_namespace = NamespaceId::new("saturation-first")?;
+    let first = thread::spawn(move || {
+        let mut client = BrokerClient::new(BrokerClientConfig {
+            address,
+            timeout: Duration::from_secs(2),
+            max_response_frame_bytes: 128 * 1024,
+        })?;
+        client.ensure_namespace(first_namespace)
+    });
+    entered_receiver.recv_timeout(Duration::from_secs(2))?;
+    wait_for_state_owner_load(&owner, 1, 0)?;
+
+    let second_namespace = NamespaceId::new("saturation-second")?;
+    let second = thread::spawn(move || {
+        let mut client = BrokerClient::new(BrokerClientConfig {
+            address,
+            timeout: Duration::from_secs(2),
+            max_response_frame_bytes: 128 * 1024,
+        })?;
+        client.ensure_namespace(second_namespace)
+    });
+    wait_for_state_owner_load(&owner, 1, 1)?;
+
+    let mut overload_client = BrokerClient::new(BrokerClientConfig {
+        address,
+        timeout: Duration::from_millis(250),
+        max_response_frame_bytes: 128 * 1024,
+    })?;
+    let overload_session = CommandSessionId::new("saturation-v3-session")?;
+    let overload_owner = SessionOwnerInstanceId::new("saturation-v3-owner")?;
+    assert_sustained_overload_rejected(
+        &mut overload_client,
+        &owner,
+        &overload_session,
+        &overload_owner,
+        OVERLOAD_ATTEMPTS,
+    )?;
+
+    release_sender.send(())?;
+    let _ = join_client(first, "first saturation client")?;
+    let _ = join_client(second, "second saturation client")?;
+    wait_for_state_owner_load(&owner, 0, 0)?;
+
+    overload_client.ensure_namespace(NamespaceId::new("saturation-after-drain")?)?;
+    assert_eq!(owner.load().queued_jobs, 0);
+    overload_client.close();
+    stop.store(true, Ordering::Release);
+    match server_thread.join() {
+        Ok(result) => result?,
+        Err(_) => return Err("saturation server thread panicked".into()),
+    }
+    Ok(())
+}
+
 #[test]
 fn server_config_rejects_non_loopback_bind() {
     let config = BrokerServerConfig {
         address: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8_811),
         max_frame_bytes: 128 * 1024,
         max_connections: 16,
+        connection_io_timeout: Duration::from_secs(30),
     };
     assert!(config.validate().is_err());
+    assert!(
+        config
+            .validate_with_policy(BrokerBindPolicy::ContainerBridge)
+            .is_ok()
+    );
+    let mut zero_timeout = config;
+    zero_timeout.connection_io_timeout = Duration::ZERO;
+    assert!(
+        zero_timeout
+            .validate_with_policy(BrokerBindPolicy::ContainerBridge)
+            .is_err()
+    );
 }
 
 #[test]

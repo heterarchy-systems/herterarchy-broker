@@ -29,11 +29,11 @@ const REQUIRED_RULES: [&str; 18] = [
 
 const REQUIRED_SKILLS: [(&str, &str); 2] = [
     (
-        ".agents/skills/rust-production-engineering/SKILL.md",
+        ".agents/rust_dev_rules/skills/rust-production-engineering/SKILL.md",
         "name: rust-production-engineering",
     ),
     (
-        ".agents/skills/rust-distributed-broker/SKILL.md",
+        ".agents/rust_dev_rules/skills/rust-distributed-broker/SKILL.md",
         "name: rust-distributed-broker",
     ),
 ];
@@ -87,14 +87,28 @@ fn run() -> HarnessResult<()> {
 }
 
 fn workspace_root() -> HarnessResult<PathBuf> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| HarnessError("xtask workspace root could not be resolved".to_owned()).into())
+    let mut candidate = env::current_dir()?;
+    loop {
+        let cargo_toml = candidate.join("Cargo.toml");
+        let xtask_manifest = candidate.join("xtask/Cargo.toml");
+        if cargo_toml.is_file() && xtask_manifest.is_file() {
+            let cargo_toml = fs::read_to_string(&cargo_toml)?;
+            if cargo_toml.contains("[workspace]") {
+                return Ok(candidate);
+            }
+        }
+        if !candidate.pop() {
+            break;
+        }
+    }
+    Err(HarnessError(
+        "xtask workspace root could not be resolved from the current directory".to_owned(),
+    )
+    .into())
 }
 
 fn verify_rules(root: &Path) -> HarnessResult<()> {
-    let rules_dir = root.join(".agents/rules");
+    let rules_dir = root.join(".agents/rust_dev_rules/rules");
     let mut actual_markdown = BTreeSet::new();
 
     for entry in fs::read_dir(&rules_dir)? {
@@ -146,6 +160,7 @@ fn verify_rules(root: &Path) -> HarnessResult<()> {
 
     verify_broker_profile(root)?;
     verify_workspace_policy(root)?;
+    verify_dependency_policy(root)?;
 
     println!(
         "rust rules: ok ({} numbered rules, {} mandatory skills)",
@@ -195,12 +210,12 @@ fn verify_skill(root: &Path, relative_path: &str, expected_name: &str) -> Harnes
 }
 
 fn verify_broker_profile(root: &Path) -> HarnessResult<()> {
-    let path = root.join(".agents/BROKER_PROFILE.md");
+    let path = root.join(".agents/rust_dev_rules/BROKER_PROFILE.md");
     let content = fs::read_to_string(&path)?;
     let required_references = [
-        ".agents/rules/00-overview.md",
-        ".agents/skills/rust-production-engineering/SKILL.md",
-        ".agents/skills/rust-distributed-broker/SKILL.md",
+        ".agents/rust_dev_rules/rules/00-overview.md",
+        ".agents/rust_dev_rules/skills/rust-production-engineering/SKILL.md",
+        ".agents/rust_dev_rules/skills/rust-distributed-broker/SKILL.md",
     ];
     for reference in required_references {
         if !content.contains(reference) {
@@ -224,6 +239,27 @@ fn verify_workspace_policy(root: &Path) -> HarnessResult<()> {
         if !cargo_toml.contains(fragment) {
             return Err(HarnessError(format!(
                 "Cargo.toml is missing required Rust policy fragment: {fragment}"
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn verify_dependency_policy(root: &Path) -> HarnessResult<()> {
+    let deny_toml = fs::read_to_string(root.join("deny.toml"))?;
+    for fragment in [
+        "[advisories]",
+        "[licenses]",
+        "[bans]",
+        "wildcards = \"deny\"",
+        "[sources]",
+        "unknown-registry = \"deny\"",
+        "unknown-git = \"deny\"",
+    ] {
+        if !deny_toml.contains(fragment) {
+            return Err(HarnessError(format!(
+                "deny.toml is missing required dependency policy fragment: {fragment}"
             ))
             .into());
         }
@@ -300,7 +336,61 @@ fn verify_production_cutover(root: &Path) -> HarnessResult<()> {
         .into());
     }
 
-    println!("production cutover: ok (Rust-only; Python reference source retired)");
+    verify_python_client_sdk_boundary(root)?;
+
+    println!(
+        "production cutover: ok (Rust Broker authority; retired Python Broker absent; client SDK isolated)"
+    );
+    Ok(())
+}
+
+fn verify_python_client_sdk_boundary(root: &Path) -> HarnessResult<()> {
+    let sdk_manifest_path = root.join("sdks/python/pyproject.toml");
+    let sdk_manifest = fs::read_to_string(&sdk_manifest_path).map_err(|error| {
+        HarnessError(format!(
+            "Python client SDK manifest is required at {}: {error}",
+            sdk_manifest_path.display()
+        ))
+    })?;
+    for fragment in [
+        "name = \"herterarchy-broker-sdk\"",
+        "Typed Python client SDK for the Rust Heterarchy Agent Broker",
+        "dependencies = []",
+        "where = [\"src\"]",
+    ] {
+        if !sdk_manifest.contains(fragment) {
+            return Err(HarnessError(format!(
+                "Python client SDK manifest is missing required client-only fragment: {fragment}"
+            ))
+            .into());
+        }
+    }
+    if sdk_manifest.contains("[project.scripts]") || sdk_manifest.contains("agentbrokerd") {
+        return Err(HarnessError(
+            "Python client SDK must not define Broker executable authority".to_owned(),
+        )
+        .into());
+    }
+
+    let package_root = root.join("sdks/python/src/agent_broker");
+    for required in [
+        "__init__.py",
+        "client.py",
+        "cluster.py",
+        "errors.py",
+        "models.py",
+        "protocol.py",
+        "standalone.py",
+    ] {
+        let path = package_root.join(required);
+        if !path.is_file() {
+            return Err(HarnessError(format!(
+                "Python client SDK is missing required boundary file: {}",
+                path.display()
+            ))
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -350,8 +440,71 @@ fn run_tests(root: &Path) -> HarnessResult<()> {
 fn run_ci(root: &Path) -> HarnessResult<()> {
     verify_rules(root)?;
     verify_production_cutover(root)?;
+    run_git_hygiene(root)?;
     run_check(root)?;
     run_tests(root)
+}
+
+fn run_git_hygiene(root: &Path) -> HarnessResult<()> {
+    let whitespace = Command::new("git")
+        .args(["diff", "--check", "HEAD", "--", "."])
+        .current_dir(root)
+        .status()?;
+    if !whitespace.success() {
+        return Err(
+            HarnessError(format!("git diff --check failed with status {whitespace}")).into(),
+        );
+    }
+
+    let protected = Command::new("git")
+        .args([
+            "diff",
+            "--quiet",
+            "HEAD",
+            "--",
+            "compatibility",
+            "fuzz/seeds",
+        ])
+        .current_dir(root)
+        .status()?;
+    if protected.success() {
+        let protected_status = Command::new("git")
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--",
+                "compatibility",
+                "fuzz/seeds",
+            ])
+            .current_dir(root)
+            .output()?;
+        if !protected_status.status.success() {
+            return Err(HarnessError(format!(
+                "protected-tree git status failed with status {}",
+                protected_status.status
+            ))
+            .into());
+        }
+        if protected_status.stdout.is_empty() {
+            return Ok(());
+        }
+        return Err(HarnessError(
+            "frozen compatibility/** or fuzz/seeds/** contains tracked or untracked changes"
+                .to_owned(),
+        )
+        .into());
+    }
+    if protected.code() == Some(1) {
+        return Err(HarnessError(
+            "frozen compatibility/** or fuzz/seeds/** changed relative to HEAD".to_owned(),
+        )
+        .into());
+    }
+    Err(HarnessError(format!(
+        "protected-tree git diff failed with status {protected}"
+    ))
+    .into())
 }
 
 fn run_cutover_checks(root: &Path) -> HarnessResult<()> {
@@ -360,6 +513,21 @@ fn run_cutover_checks(root: &Path) -> HarnessResult<()> {
 }
 
 fn run_performance_checks(root: &Path) -> HarnessResult<()> {
+    run_cargo(
+        root,
+        "release snapshot transport RSS budget",
+        &[
+            "test",
+            "--release",
+            "-p",
+            "agent-broker-consensus",
+            "snapshot_binary_transfer_peak_rss_is_bounded",
+            "--",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+    )?;
     run_cargo(
         root,
         "release perf build",
@@ -527,6 +695,19 @@ fn run_extended_checks(root: &Path) -> HarnessResult<()> {
             ],
         )?;
     }
+    let v3_corpus = prepare_empty_fuzz_runtime_corpus(root, "protocol_v3")?;
+    run_nightly_cargo(
+        root,
+        "fuzz smoke",
+        &[
+            "fuzz",
+            "run",
+            "protocol_v3",
+            v3_corpus.as_str(),
+            "--",
+            "-max_total_time=2",
+        ],
+    )?;
     verify_fuzz_seed_corpus(root)?;
     println!("fuzz seeds: immutable after cargo-fuzz smoke runs");
     Ok(())
@@ -548,6 +729,12 @@ fn prepare_fuzz_runtime_corpus(root: &Path, target: &str) -> HarnessResult<Strin
     Ok(corpus_directory.to_string_lossy().into_owned())
 }
 
+fn prepare_empty_fuzz_runtime_corpus(root: &Path, target: &str) -> HarnessResult<String> {
+    let corpus_directory = root.join("fuzz/corpus").join(target);
+    fs::create_dir_all(&corpus_directory)?;
+    Ok(corpus_directory.to_string_lossy().into_owned())
+}
+
 fn run_doctor(root: &Path) -> HarnessResult<()> {
     println!("workspace: {}", root.display());
     print_tool_version(root, "rustc", &["--version"])?;
@@ -561,6 +748,7 @@ fn run_doctor(root: &Path) -> HarnessResult<()> {
 }
 
 fn run_dependency_checks(root: &Path) -> HarnessResult<()> {
+    verify_dependency_policy(root)?;
     if !cargo_subcommand_available(root, "deny")? {
         return Err(HarnessError(
             "cargo-deny is not installed; install it explicitly before running `cargo xtask deps`"

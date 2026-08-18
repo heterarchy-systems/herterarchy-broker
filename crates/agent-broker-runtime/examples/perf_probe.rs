@@ -7,9 +7,11 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agent_broker_application::ConsensusAdapter;
-use agent_broker_client::{BrokerClient, BrokerClientConfig};
-use agent_broker_consensus::StandaloneConsensusAdapter;
+use agent_broker_application::{BrokerErrorCode, ConsensusAdapter};
+use agent_broker_client::{BrokerClient, BrokerClientConfig, ClientError};
+use agent_broker_consensus::{
+    OneNodeRaftConfig, OneNodeRaftConsensusAdapter, StandaloneConsensusAdapter,
+};
 use agent_broker_domain::commands::{
     BrokerCommand, ClaimTaskCommand, CompleteTaskCommand, EnsureConsumerGroupCommand,
     EnsureNamespaceCommand, JoinConsumerGroupCommand, PublishTaskCommand,
@@ -28,6 +30,7 @@ use tempfile::{TempDir, tempdir};
 const HOT_PUBLISH_COUNT: u32 = 20_000;
 const CLAIM_COMPLETE_COUNT: u32 = 5_000;
 const DURABLE_PUBLISH_COUNT: u32 = 500;
+const ONE_NODE_RAFT_WRITE_COUNT: u32 = 500;
 const SNAPSHOT_TASK_COUNT: u32 = 1_000;
 const PROTOCOL_LATENCY_SAMPLES: usize = 500;
 const QUEUE_SATURATION_CLIENTS: usize = 16;
@@ -37,7 +40,9 @@ const MAX_IDLE_RSS_MIB: f64 = 32.0;
 const MIN_PUBLISH_OPS_PER_SECOND: f64 = 100_000.0;
 const MIN_CLAIM_COMPLETE_PAIRS_PER_SECOND: f64 = 50_000.0;
 const MIN_DURABLE_PUBLISH_OPS_PER_SECOND: f64 = 2_000.0;
+const MIN_ONE_NODE_RAFT_WRITES_PER_SECOND: f64 = 50.0;
 const MAX_PROTOCOL_P99_MS: f64 = 5.0;
+const MAX_ONE_NODE_RAFT_WRITE_P99_MS: f64 = 50.0;
 const MAX_SNAPSHOT_INSTALL_MS: f64 = 250.0;
 const MAX_RECOVERY_MS: f64 = 250.0;
 const MAX_QUEUE_SATURATION_MS: f64 = 1_000.0;
@@ -80,6 +85,17 @@ struct ProtocolMetrics {
     p95: f64,
     p99: f64,
     queue_saturation_max: f64,
+    queue_saturation_successes: usize,
+    queue_saturation_rejections: usize,
+}
+
+#[derive(Debug)]
+struct OneNodeRaftMetrics {
+    committed_write_ops_per_second: f64,
+    p50: f64,
+    p95: f64,
+    p99: f64,
+    remote_attempt_count: u64,
 }
 
 fn main() {
@@ -92,9 +108,17 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     let hot = measure_hot_paths()?;
     let storage = measure_storage()?;
+    let one_node_raft = measure_one_node_raft()?;
     let process = start_release_daemon()?;
     let protocol = measure_protocol(&process)?;
+    let logical_cpus = thread::available_parallelism()?.get();
     let output = json!({
+        "environment": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "family": std::env::consts::FAMILY,
+            "logical_cpus": logical_cpus,
+        },
         "cold_boot_ms": process.boot_ms,
         "idle_rss_mib": process.rss_mib,
         "publish_ops_per_second": hot.publish_ops_per_second,
@@ -107,14 +131,27 @@ fn run() -> Result<(), Box<dyn Error>> {
         },
         "snapshot_install_ms": storage.snapshot_install_ms,
         "recovery_ms": storage.recovery_ms,
+        "one_node_raft": {
+            "committed_write_ops_per_second": one_node_raft.committed_write_ops_per_second,
+            "committed_write_latency_ms": {
+                "p50": one_node_raft.p50,
+                "p95": one_node_raft.p95,
+                "p99": one_node_raft.p99,
+            },
+            "remote_attempt_count": one_node_raft.remote_attempt_count,
+        },
         "queue_saturation_max_ms": protocol.queue_saturation_max,
+        "queue_saturation_successes": protocol.queue_saturation_successes,
+        "queue_saturation_rejections": protocol.queue_saturation_rejections,
         "budgets": {
             "max_cold_boot_ms": MAX_COLD_BOOT_MS,
             "max_idle_rss_mib": MAX_IDLE_RSS_MIB,
             "min_publish_ops_per_second": MIN_PUBLISH_OPS_PER_SECOND,
             "min_claim_complete_pairs_per_second": MIN_CLAIM_COMPLETE_PAIRS_PER_SECOND,
             "min_durable_publish_ops_per_second": MIN_DURABLE_PUBLISH_OPS_PER_SECOND,
+            "min_one_node_raft_writes_per_second": MIN_ONE_NODE_RAFT_WRITES_PER_SECOND,
             "max_protocol_p99_ms": MAX_PROTOCOL_P99_MS,
+            "max_one_node_raft_write_p99_ms": MAX_ONE_NODE_RAFT_WRITE_P99_MS,
             "max_snapshot_install_ms": MAX_SNAPSHOT_INSTALL_MS,
             "max_recovery_ms": MAX_RECOVERY_MS,
             "max_queue_saturation_ms": MAX_QUEUE_SATURATION_MS,
@@ -122,15 +159,63 @@ fn run() -> Result<(), Box<dyn Error>> {
         "profile": "release",
     });
     println!("{output}");
-    enforce_budgets(&process, &hot, &storage, &protocol)?;
+    enforce_budgets(&process, &hot, &storage, &one_node_raft, &protocol)?;
     process.stop()?;
     Ok(())
+}
+
+fn measure_one_node_raft() -> Result<OneNodeRaftMetrics, Box<dyn Error>> {
+    let directory = tempdir()?;
+    let state_path = directory.path().join("one-node-perf.redb");
+    let snapshot_interval = u64::from(ONE_NODE_RAFT_WRITE_COUNT) + 1_024;
+    let config =
+        OneNodeRaftConfig::new(state_path).with_snapshot_log_interval(snapshot_interval)?;
+    let mut adapter = OneNodeRaftConsensusAdapter::open(config)?;
+    let namespace_id = NamespaceId::new("one-node-perf")?;
+    adapter.propose(BrokerCommand::EnsureNamespace(EnsureNamespaceCommand {
+        namespace_id: namespace_id.clone(),
+        max_namespaces: 64,
+    }))?;
+
+    let started = Instant::now();
+    let mut latency_micros = Vec::with_capacity(usize::try_from(ONE_NODE_RAFT_WRITE_COUNT)?);
+    for index in 0..ONE_NODE_RAFT_WRITE_COUNT {
+        let write_started = Instant::now();
+        adapter.propose(BrokerCommand::PublishTask(PublishTaskCommand {
+            namespace_id: namespace_id.clone(),
+            task_id: TaskId::new(format!("one-node-{index}"))?,
+            objective: TaskObjective::new("committed raft write")?,
+            created_at_ms: TimestampMs::new(u64::from(index)),
+            max_namespace_tasks: usize::try_from(ONE_NODE_RAFT_WRITE_COUNT + 1)?,
+        }))?;
+        latency_micros.push(write_started.elapsed().as_secs_f64() * 1_000_000.0);
+    }
+    let committed_write_ops_per_second = rate(ONE_NODE_RAFT_WRITE_COUNT, started.elapsed());
+    latency_micros.sort_by(f64::total_cmp);
+
+    let progress = adapter.progress()?;
+    if progress.remote_attempt_count != 0 {
+        return Err("one-node Raft perf probe attempted a remote RPC".into());
+    }
+    if progress.applied_index != progress.committed_index {
+        return Err("one-node Raft perf probe observed committed/applied divergence".into());
+    }
+    adapter.shutdown()?;
+
+    Ok(OneNodeRaftMetrics {
+        committed_write_ops_per_second,
+        p50: percentile(&latency_micros, 50) / 1_000.0,
+        p95: percentile(&latency_micros, 95) / 1_000.0,
+        p99: percentile(&latency_micros, 99) / 1_000.0,
+        remote_attempt_count: progress.remote_attempt_count,
+    })
 }
 
 fn enforce_budgets(
     process: &ProcessProbe,
     hot: &HotPathMetrics,
     storage: &StorageMetrics,
+    one_node_raft: &OneNodeRaftMetrics,
     protocol: &ProtocolMetrics,
 ) -> Result<(), Box<dyn Error>> {
     require_max("cold boot", process.boot_ms, MAX_COLD_BOOT_MS)?;
@@ -149,6 +234,16 @@ fn enforce_budgets(
         "durable publish throughput",
         storage.durable_publish_ops_per_second,
         MIN_DURABLE_PUBLISH_OPS_PER_SECOND,
+    )?;
+    require_min(
+        "one-node Raft committed write throughput",
+        one_node_raft.committed_write_ops_per_second,
+        MIN_ONE_NODE_RAFT_WRITES_PER_SECOND,
+    )?;
+    require_max(
+        "one-node Raft committed write p99",
+        one_node_raft.p99,
+        MAX_ONE_NODE_RAFT_WRITE_P99_MS,
     )?;
     require_max("protocol p99", protocol.p99, MAX_PROTOCOL_P99_MS)?;
     require_max(
@@ -421,33 +516,54 @@ fn measure_protocol(process: &ProcessProbe) -> Result<ProtocolMetrics, Box<dyn E
     for index in 0..QUEUE_SATURATION_CLIENTS {
         let barrier = Arc::clone(&barrier);
         let namespace_id = namespace_id.clone();
-        handles.push(thread::spawn(move || -> Result<f64, String> {
+        handles.push(thread::spawn(move || -> Result<(f64, bool), String> {
             let mut client = BrokerClient::new(config).map_err(|error| error.to_string())?;
             barrier.wait();
             let start = Instant::now();
-            client
-                .publish_task(
-                    namespace_id,
-                    TaskId::new(format!("queue-{index}")).map_err(|error| error.to_string())?,
-                    TaskObjective::new("queue saturation").map_err(|error| error.to_string())?,
-                )
-                .map_err(|error| error.to_string())?;
-            Ok(millis(start.elapsed()))
+            let result = client.publish_task(
+                namespace_id,
+                TaskId::new(format!("queue-{index}")).map_err(|error| error.to_string())?,
+                TaskObjective::new("queue saturation").map_err(|error| error.to_string())?,
+            );
+            let rejected = match result {
+                Ok(_) => false,
+                Err(ClientError::Broker(error))
+                    if error.code() == BrokerErrorCode::CapacityExceeded =>
+                {
+                    true
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            Ok((millis(start.elapsed()), rejected))
         }));
     }
     let mut queue_saturation_max = 0.0_f64;
+    let mut queue_saturation_successes = 0_usize;
+    let mut queue_saturation_rejections = 0_usize;
     for handle in handles {
         let result = handle
             .join()
             .map_err(|_| "queue saturation worker panicked")?;
-        queue_saturation_max = queue_saturation_max
-            .max(result.map_err(|error| format!("queue saturation worker failed: {error}"))?);
+        let (elapsed_ms, rejected) =
+            result.map_err(|error| format!("queue saturation worker failed: {error}"))?;
+        queue_saturation_max = queue_saturation_max.max(elapsed_ms);
+        if rejected {
+            queue_saturation_rejections += 1;
+        } else {
+            queue_saturation_successes += 1;
+        }
     }
+    if queue_saturation_successes + queue_saturation_rejections != QUEUE_SATURATION_CLIENTS {
+        return Err("queue saturation probe did not classify every worker outcome".into());
+    }
+    client.health()?;
     Ok(ProtocolMetrics {
         p50,
         p95,
         p99,
         queue_saturation_max,
+        queue_saturation_successes,
+        queue_saturation_rejections,
     })
 }
 

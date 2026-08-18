@@ -3,16 +3,23 @@
 
 mod clock;
 mod error;
+mod operations;
 mod standalone_maintenance;
 mod state_owner;
 mod state_process_lock;
 mod tcp_server;
 
 pub use error::RuntimeError;
-pub use standalone_maintenance::{
-    MaintenanceRunError, StandaloneMaintenancePolicy, StandaloneMaintenanceResult,
-    StandaloneMaintenanceRunner,
+pub use operations::{
+    ClusterOperationsObserver, ClusterOperationsReason, ClusterOperationsSnapshot,
+    OperationsBindPolicy, OperationsServer, OperationsServerConfig,
 };
-pub use state_owner::StateOwnerHandle;
+pub use standalone_maintenance::{
+    LeaderMaintenanceResult, LeaderMaintenanceRunner, MaintenanceRunError,
+    StandaloneMaintenancePolicy, StandaloneMaintenanceResult, StandaloneMaintenanceRunner,
+};
+pub use state_owner::{StateOwnerHandle, StateOwnerLoad};
 pub use state_process_lock::BrokerStateProcessLock;
-pub use tcp_server::{BrokerServerConfig, TcpBrokerServer};
+pub use tcp_server::{
+    BrokerBindPolicy, BrokerServerConfig, BrokerServerLoad, BrokerServerObserver, TcpBrokerServer,
+};

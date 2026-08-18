@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust canonical harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97
+        run: |
+          rustup toolchain install 1.97 --profile minimal --component clippy,rustfmt
+          rustup default 1.97
+          rustc --version
+          cargo --version
+
+      - name: Run canonical Rust CI
+        run: cargo xtask ci
+
+  python-matrix:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+    defaults:
+      run:
+        working-directory: sdks/python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.3"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Sync locked development environment
+        run: uv sync --locked --dev
+
+      - name: Run sync and native-asyncio focused tests
+        env:
+          PYTHONPATH: src
+        run: uv run python -m unittest -v tests.test_sdk tests.test_async_sdk
+
+  python-quality:
+    name: Python quality and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sdks/python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.3"
+          python-version: "3.11"
+
+      - name: Sync locked development environment
+        run: uv sync --locked --dev
+
+      - name: Ruff lint
+        run: uv run ruff check src tests
+
+      - name: Ruff format check
+        run: uv run ruff format --check src tests
+
+      - name: Pyrefly typecheck
+        run: uv run pyrefly check
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Smoke test wheel
+        run: >-
+          uv run --isolated --no-project --python 3.11 --with dist/*.whl python -c
+          "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
+          StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
+          AsyncClusterBrokerClient; print('wheel imports: PASS')"
+
+      - name: Smoke test source distribution
+        run: >-
+          uv run --isolated --no-project --python 3.11 --with dist/*.tar.gz python -c
+          "import agent_broker; from agent_broker import BrokerClient, StandaloneBrokerClient,
+          StaticClusterBrokerClient, AsyncBrokerClient, AsyncStandaloneBrokerClient,
+          AsyncClusterBrokerClient; print('sdist imports: PASS')"
+
+  python-real-integration:
+    name: Python real Rust integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97
+        run: |
+          rustup toolchain install 1.97 --profile minimal
+          rustup default 1.97
+
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.3"
+          python-version: "3.11"
+
+      - name: Build real Broker integration binaries
+        run: |
+          cargo build -q -p agent-broker-runtime --bin agentbrokerd
+          cargo build -q -p agent-broker-consensus --example generate_cluster_tls
+
+      - name: Run standalone and three-node sync/async integration
+        working-directory: sdks/python
+        env:
+          PYTHONPATH: src
+          AGENT_BROKER_RUN_RUST_INTEGRATION: "1"
+          AGENT_BROKER_RUN_CLUSTER_INTEGRATION: "1"
+          AGENT_BROKER_RUN_ASYNC_RUST_INTEGRATION: "1"
+          AGENT_BROKER_RUN_ASYNC_CLUSTER_INTEGRATION: "1"
+        run: >-
+          uv run --no-project --python 3.11 python -m unittest -v
+          tests.test_rust_integration
+          tests.test_cluster_integration
+          tests.test_async_integration
+
+  docker:
+    name: Docker multi-arch build only
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build production image without push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            VCS_REF=${{ github.sha }}

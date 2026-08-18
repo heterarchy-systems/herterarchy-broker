@@ -1,4 +1,6 @@
-use agent_broker_application::{BrokerError, BrokerErrorCode};
+use agent_broker_application::{
+    BrokerError, BrokerErrorCode, BrokerErrorDisposition, SessionOwnerEpoch,
+};
 use agent_broker_domain::{
     ConsumerGroupId, Generation, LeaseEpoch, LeaseId, MemberId, NamespaceId, Revision, TaskId,
     TaskObjective, TaskStatus, Term, TimestampMs,
@@ -71,6 +73,9 @@ pub enum SuccessPayload {
         task_revision: Revision,
         status: TaskStatus,
     },
+    SessionOwnerAcquired {
+        owner_epoch: SessionOwnerEpoch,
+    },
 }
 
 impl From<DispatchResult> for SuccessPayload {
@@ -138,6 +143,9 @@ impl From<DispatchResult> for SuccessPayload {
                 task_revision: result.task_revision,
                 status: result.status,
             },
+            DispatchResult::SessionOwnerAcquired(owner_epoch) => {
+                Self::SessionOwnerAcquired { owner_epoch }
+            }
         }
     }
 }
@@ -147,6 +155,7 @@ impl From<DispatchResult> for SuccessPayload {
 pub struct ErrorPayload {
     pub code: BrokerErrorCode,
     pub message: String,
+    pub disposition: BrokerErrorDisposition,
 }
 
 impl From<BrokerError> for ErrorPayload {
@@ -154,6 +163,7 @@ impl From<BrokerError> for ErrorPayload {
         Self {
             code: error.code(),
             message: error.message().to_owned(),
+            disposition: error.disposition(),
         }
     }
 }
